@@ -12,6 +12,7 @@
  *   clamp  - texture coordinate wrap versus clamp, side by side
  *   texfmt - one tile per remaining texture format (I8/A8/AI44/AI88/
  *            ARGB8332/AYIQ/AP88/P8_RGBA)
+ *   fog    - the fog factor sources: eye-W table, alpha, Z, constant
  *
  * At start-up it renders one canonical frame (a fixed animation phase) of
  * the selected scene and prints a digest of it to the serial console,
@@ -19,7 +20,7 @@
  * grid) lets a QEMU run and a real-hardware run be compared, and the
  * selectable scenes make per-feature regression testing possible.
  *
- * Usage: tdfx3d_demo [/dev/tdfx3d] [/dev/fb0] [basic|cubes|grid|twod|clamp|texfmt] [dump]
+ * Usage: tdfx3d_demo [/dev/tdfx3d] [/dev/fb0] [basic|cubes|grid|twod|clamp|texfmt|fog] [dump]
  *
  * Freestanding (nolibc); build with the Makefile here.  Boot the card
  * with e.g. tdfxfb.mode_option=640x480-16@60 (RGB565, fb at VRAM 0).
@@ -32,7 +33,7 @@
 #define TEXCP		(TDFX_CP_RGB_TEXTURE | TDFX_CP_TEXTURE_EN)
 #define CANON_T		1.234f		/* canonical animation phase */
 
-enum { SC_BASIC, SC_CUBES, SC_GRID, SC_TWOD, SC_CLAMP, SC_TEXFMT };
+enum { SC_BASIC, SC_CUBES, SC_GRID, SC_TWOD, SC_CLAMP, SC_TEXFMT, SC_FOG };
 
 /* ============================ scene: basic ========================== */
 static void scene_basic(float t)
@@ -619,6 +620,63 @@ static void scene_clamp(float t)
 	smoltdfx_quad(mid, 0, W, H, -1, -1, -1, -1, 512, 512);
 }
 
+/* ============================ scene: fog =========================== */
+/*
+ * the fog unit's factor sources: eye-W table, iterated alpha, iterated Z,
+ * and the constant fogColor add.  one quadrant each.
+ */
+static void scene_fog(float t)
+{
+	int W = smoltdfx_W, H = smoltdfx_H, mx = W / 2, my = H / 2;
+
+	(void)t;
+	smoltdfx_target();
+	smoltdfx_clip_full();
+	smoltdfx_clear(0xff101018, 0xffff);
+	smoltdfx_fbz = TDFX_FBZ_RGBWRMASK | (TDFX_ZF_GT << TDFX_FBZ_ZFUNC_SHIFT);
+	smoltdfx_zfunc(7);				/* ALWAYS: no depth test */
+
+	/* TL: table fog, factor from eye-W (near left -> far right) */
+	smoltdfx_clip(0, 0, mx - 1, my - 1);
+	smoltdfx_fog_table(0x2040ff);
+	smoltdfx_setupmode(SM_BASE);
+	smoltdfx_vtx(0,  0,  1, 0xffff8000, 0, 0, 1.0f,    1);
+	smoltdfx_vtx(mx, 0,  1, 0xffff8000, 0, 0, 0.0002f, 0);
+	smoltdfx_vtx(mx, my, 1, 0xffff8000, 0, 0, 0.0002f, 0);
+	smoltdfx_vtx(0,  0,  1, 0xffff8000, 0, 0, 1.0f,    1);
+	smoltdfx_vtx(mx, my, 1, 0xffff8000, 0, 0, 0.0002f, 0);
+	smoltdfx_vtx(0,  my, 1, 0xffff8000, 0, 0, 1.0f,    0);
+	smoltdfx_fog_off();
+
+	/* TR: factor from iterated alpha (left a=0 -> pixel, right a=255 -> fog) */
+	smoltdfx_clip(mx, 0, W - 1, my - 1);
+	smoltdfx_fog(0x20ff40, TDFX_FOG_ALPHA);
+	smoltdfx_setupmode(SM_A);
+	smoltdfx_quad(mx, 0, W, my, 0x00ff8000, 0x00ff8000,
+		      0xffff8000, 0xffff8000, 0, 0);
+	smoltdfx_fog_off();
+
+	/* BL: factor from iterated Z (left z=0 -> pixel, right z=max -> fog) */
+	smoltdfx_clip(0, my, mx - 1, H - 1);
+	smoltdfx_fog(0xff4020, TDFX_FOG_Z);
+	smoltdfx_setupmode(SM_BASE);
+	smoltdfx_vtx(0,  my, 0,     0xff20a0ff, 0, 0, 1.0f, 1);
+	smoltdfx_vtx(mx, my, 65000, 0xff20a0ff, 0, 0, 1.0f, 0);
+	smoltdfx_vtx(mx, H,  65000, 0xff20a0ff, 0, 0, 1.0f, 0);
+	smoltdfx_vtx(0,  my, 0,     0xff20a0ff, 0, 0, 1.0f, 1);
+	smoltdfx_vtx(mx, H,  65000, 0xff20a0ff, 0, 0, 1.0f, 0);
+	smoltdfx_vtx(0,  H,  0,     0xff20a0ff, 0, 0, 1.0f, 0);
+	smoltdfx_fog_off();
+
+	/* BR: constant fog, fogColor added to a grey gradient */
+	smoltdfx_clip(mx, my, W - 1, H - 1);
+	smoltdfx_fog(0x000060, TDFX_FOG_CONSTANT);
+	smoltdfx_setupmode(SM_BASE);
+	smoltdfx_quad(mx, my, W, H, 0xff000000, 0xff808080,
+		      0xff404040, 0xffc0c0c0, 0, 0);
+	smoltdfx_fog_off();
+}
+
 /* ------------------------------ driver ------------------------------- */
 static void draw_scene(int scene, float t)
 {
@@ -632,6 +690,8 @@ static void draw_scene(int scene, float t)
 		scene_clamp(t);
 	else if (scene == SC_TEXFMT)
 		scene_texfmt(t);
+	else if (scene == SC_FOG)
+		scene_fog(t);
 	else
 		scene_grid(t);
 }
@@ -671,6 +731,9 @@ int main(int argc, char **argv)
 		} else if (streq(argv[i], "texfmt")) {
 			scene = SC_TEXFMT;
 			tag = "texfmt";
+		} else if (streq(argv[i], "fog")) {
+			scene = SC_FOG;
+			tag = "fog";
 		} else if (streq(argv[i], "dump")) {
 			do_ppm = 1;
 		} else if (npos++ == 0) {
