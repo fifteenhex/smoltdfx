@@ -240,6 +240,17 @@ static inline void smoltdfx_tex_off(void)
 	smoltdfx_w3(TDFX_3D_FBZCOLORPATH, TDFX_CP_RGB_ITERATED);
 }
 
+/*
+ * Select the active mip range for the current texture.  lodmin/lodmax are
+ * integer levels (level L is a 256>>L square); call after smoltdfx_tex(),
+ * which resets the range to level 0 only.  The tLOD fields are 4.2 fixed.
+ */
+static inline void smoltdfx_lod(unsigned int lodmin, unsigned int lodmax)
+{
+	smoltdfx_w3(TDFX_3D_TLOD,
+		    ((lodmin << 2) & 0x3f) | (((lodmax << 2) & 0x3f) << 6));
+}
+
 /* download one 0xRRGGBB CLUT entry (P8/AP88), broadcast to both TMUs */
 static inline void smoltdfx_palette(int idx, unsigned int rgb)
 {
