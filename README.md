@@ -12,6 +12,8 @@ register spaces) and which provides a `TDFX3D_WAIT_VBLANK` ioctl.
 Together with the `/dev/fbN` VRAM mapping this program renders directly
 from the hardware registers — no X, no Mesa/Glide.
 
+![smoltdfx demo](doc/screenshot.png)
+
 ## Layout
 
 - **`smoltdfx.h`** — a small header-only library that wraps the raw
