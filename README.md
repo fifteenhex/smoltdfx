@@ -12,7 +12,11 @@ register spaces) and which provides a `TDFX3D_WAIT_VBLANK` ioctl.
 Together with the `/dev/fbN` VRAM mapping this program renders directly
 from the hardware registers — no X, no Mesa/Glide.
 
-![smoltdfx demo](doc/screenshot.png)
+The demo has selectable scenes:
+
+| `basic` | `cubes` |
+|:---:|:---:|
+| ![basic scene](doc/basic.png) | ![cubes scene](doc/cubes.png) |
 
 ## Layout
 
@@ -44,7 +48,7 @@ Needs a Linux source tree with the `/dev/tdfx3d` support for its in-tree
 
 ## Run
 
-    ./tdfx3d_demo [/dev/tdfx3d] [/dev/fb0]
+    ./tdfx3d_demo [/dev/tdfx3d] [/dev/fb0] [basic|cubes]
 
 Boot the card in a 16bpp mode first, e.g.
 `tdfxfb.mode_option=640x480-16@60`.

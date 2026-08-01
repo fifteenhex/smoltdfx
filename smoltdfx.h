@@ -176,6 +176,17 @@ static inline void smoltdfx_zfunc(unsigned int func)
 		       ((func & 7) << TDFX_FBZ_ZFUNC_SHIFT);
 	smoltdfx_w3(TDFX_3D_FBZMODE, smoltdfx_fbz);
 }
+
+/* enable/disable depth testing (and depth writes) with a compare func */
+static inline void smoltdfx_depth(int enable, unsigned int func)
+{
+	if (enable)
+		smoltdfx_fbz |= TDFX_FBZ_ENDEPTH | TDFX_FBZ_DEPTHWRMASK;
+	else
+		smoltdfx_fbz &= ~(TDFX_FBZ_ENDEPTH | TDFX_FBZ_DEPTHWRMASK);
+	smoltdfx_zfunc(func);
+}
+
 static inline void smoltdfx_clip(int x0, int y0, int x1, int y1)
 {
 	smoltdfx_w3(TDFX_3D_CLIPLEFTRIGHT, ((x0 & 0x3ff) << 16) | (x1 & 0x3ff));
