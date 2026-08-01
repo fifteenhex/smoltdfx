@@ -261,7 +261,7 @@ static void gen_textures(void)
 #define GX		5
 #define GY		4
 #define INSET		3
-#define NTILE		18		/* tiles drawn this revision (18,19 blank) */
+#define NTILE		20		/* every tile drawn */
 
 static void tile_rect(int idx, int *x0, int *y0, int *x1, int *y1)
 {
@@ -426,6 +426,47 @@ static void draw_tile(int idx, float t)
 		smoltdfx_setupmode(SM_BASE);
 		smoltdfx_quad(fx0, dy0, fx1, dy1, 0xffffffff, 0xff000000,
 			      0xffffffff, 0xff000000, 0, 0);
+		break;
+	}
+	case 18: {	/* 2D host-to-screen blit: RGB565 pixels from host memory */
+		static unsigned short img[128 * 120];	/* one 640x480 grid tile */
+		int w = x1 - x0, h = y1 - y0;
+		int u, v;
+
+		for (v = 0; v < h; v++)
+			for (u = 0; u < w; u++) {
+				int r = u * 255 / w, g = v * 255 / h;
+
+				img[v * w + u] = smoltdfx_rgb565(r, g,
+								 (u ^ v) & 0xff);
+			}
+		smoltdfx_blt_rgb565(x0, y0, w, h, img);
+		break;
+	}
+	case 19: {	/* spinning textured quad (rotated 3D triangles) */
+		static const signed char qx[4] = { -1, 1, 1, -1 };
+		static const signed char qy[4] = { -1, -1, 1, 1 };
+		static const short qs[4] = { 0, 256, 256, 0 };
+		static const short qt[4] = { 0, 0, 256, 256 };
+		static const int qi[6] = { 0, 1, 2, 0, 2, 3 };
+		float c = smoltdfx_cos(t), s = smoltdfx_sin(t);
+		float r = (fx1 - fx0) * 0.35f;
+		float px[4], py[4];
+		int k;
+
+		for (k = 0; k < 4; k++) {
+			px[k] = cx + (qx[k] * c - qy[k] * s) * r;
+			py[k] = cy + (qx[k] * s + qy[k] * c) * r;
+		}
+		smoltdfx_tex(TX_CHECK, TDFX_TFMT_RGB565, TDFX_TEX_MAGFILTER,
+			     SMOLTDFX_TC_PASS, TEXCP);
+		smoltdfx_setupmode(SM_TEX);
+		for (k = 0; k < 6; k++) {
+			int j = qi[k];
+
+			smoltdfx_vtx(px[j], py[j], 1.0f, -1, qs[j], qt[j],
+				     1.0f, k % 3 == 0);
+		}
 		break;
 	}
 	}
