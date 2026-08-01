@@ -18,6 +18,10 @@ The demo has selectable scenes:
 |:---:|:---:|:---:|
 | ![basic scene](doc/basic.png) | ![cubes scene](doc/cubes.png) | ![grid scene](doc/grid.png) |
 
+| `twod` | `clamp` |
+|:---:|:---:|
+| ![twod scene](doc/twod.png) | ![clamp scene](doc/clamp.png) |
+
 ## Layout
 
 - **`smoltdfx.h`** — a small header-only library that wraps the raw
@@ -48,7 +52,7 @@ Needs a Linux source tree with the `/dev/tdfx3d` support for its in-tree
 
 ## Run
 
-    ./tdfx3d_demo [/dev/tdfx3d] [/dev/fb0] [basic|cubes|grid]
+    ./tdfx3d_demo [/dev/tdfx3d] [/dev/fb0] [basic|cubes|grid|twod|clamp]
 
 Boot the card in a 16bpp mode first, e.g.
 `tdfxfb.mode_option=640x480-16@60`.

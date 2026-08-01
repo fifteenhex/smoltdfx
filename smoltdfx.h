@@ -415,7 +415,7 @@ static inline void smoltdfx_blt_rgb565(int dx, int dy, int w, int h,
 	smoltdfx_w2(TDFX_2D_SRCFORMAT, 3u << 16);
 	smoltdfx_w2(TDFX_2D_DSTSIZE, (h << 16) | w);
 	smoltdfx_w2(TDFX_2D_DSTXY, (dy << 16) | dx);
-	smoltdfx_w2(TDFX_2D_COMMAND, TDFX_2D_OP_H2S_BLT | (1u << 8) |
+	smoltdfx_w2(TDFX_2D_COMMAND, TDFX_2D_OP_H2S_BLT | TDFX_2D_CMD_INITIATE |
 		    (TDFX_2D_ROP_SRCCOPY << 24));
 
 	for (y = 0; y < h; y++) {
@@ -427,6 +427,50 @@ static inline void smoltdfx_blt_rgb565(int dx, int dy, int w, int h,
 			smoltdfx_w2(TDFX_2D_LAUNCH, word);
 		}
 	}
+	smoltdfx_wait_idle();
+}
+
+/* fill a w x h rectangle at (dx,dy) in the render target with an RGB565 colour */
+static inline void smoltdfx_rectfill(int dx, int dy, int w, int h,
+				     unsigned int color)
+{
+	unsigned int dst = smoltdfx_cur ? smoltdfx_back : smoltdfx_front;
+
+	smoltdfx_wait_idle();
+	smoltdfx_w2(TDFX_2D_CLIP0MIN, 0);
+	smoltdfx_w2(TDFX_2D_CLIP0MAX, (smoltdfx_H << 16) | smoltdfx_W);
+	smoltdfx_w2(TDFX_2D_DSTBASE, dst);
+	smoltdfx_w2(TDFX_2D_DSTFORMAT, (3u << 16) | smoltdfx_stride);
+	smoltdfx_w2(TDFX_2D_COLORFORE, color);
+	smoltdfx_w2(TDFX_2D_DSTSIZE, (h << 16) | w);
+	smoltdfx_w2(TDFX_2D_DSTXY, (dy << 16) | dx);
+	smoltdfx_w2(TDFX_2D_COMMAND, TDFX_2D_OP_RECTFILL | TDFX_2D_CMD_INITIATE |
+		    (TDFX_2D_ROP_SRCCOPY << 24));
+	smoltdfx_wait_idle();
+}
+
+/*
+ * Screen-to-screen blit: copy a w x h block from (sx,sy) to (dx,dy) within
+ * the render target.  Copies top-left to bottom-right, so it is safe for
+ * non-overlapping regions (as used here).
+ */
+static inline void smoltdfx_blt_s2s(int sx, int sy, int dx, int dy,
+				    int w, int h)
+{
+	unsigned int buf = smoltdfx_cur ? smoltdfx_back : smoltdfx_front;
+
+	smoltdfx_wait_idle();
+	smoltdfx_w2(TDFX_2D_CLIP0MIN, 0);
+	smoltdfx_w2(TDFX_2D_CLIP0MAX, (smoltdfx_H << 16) | smoltdfx_W);
+	smoltdfx_w2(TDFX_2D_SRCBASE, buf);
+	smoltdfx_w2(TDFX_2D_SRCFORMAT, (3u << 16) | smoltdfx_stride);
+	smoltdfx_w2(TDFX_2D_DSTBASE, buf);
+	smoltdfx_w2(TDFX_2D_DSTFORMAT, (3u << 16) | smoltdfx_stride);
+	smoltdfx_w2(TDFX_2D_DSTSIZE, (h << 16) | w);
+	smoltdfx_w2(TDFX_2D_SRCXY, (sy << 16) | sx);
+	smoltdfx_w2(TDFX_2D_DSTXY, (dy << 16) | dx);
+	smoltdfx_w2(TDFX_2D_COMMAND, TDFX_2D_OP_S2S_BLT | TDFX_2D_CMD_INITIATE |
+		    (TDFX_2D_ROP_SRCCOPY << 24));
 	smoltdfx_wait_idle();
 }
 
