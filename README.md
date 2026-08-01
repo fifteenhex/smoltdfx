@@ -22,6 +22,10 @@ The demo has selectable scenes:
 |:---:|:---:|:---:|
 | ![twod scene](doc/twod.png) | ![clamp scene](doc/clamp.png) | ![texfmt scene](doc/texfmt.png) |
 
+| `fog` |
+|:---:|
+| ![fog scene](doc/fog.png) |
+
 ## Layout
 
 - **`smoltdfx.h`** — a small header-only library that wraps the raw
