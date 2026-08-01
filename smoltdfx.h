@@ -1,0 +1,239 @@
+/*
+ * smoltdfx.h - a tiny freestanding (nolibc) library for driving the 3dfx
+ * Voodoo3 ("Avenger"/SST) 3D + 2D engine through a /dev/tdfx3d misc
+ * device (added by out-of-tree patches) and the /dev/fbN VRAM mapping.
+ *
+ * It wraps the raw register pokes into a small state-machine API:
+ *   - smoltdfx_init()     open the device, learn the mode, set up buffers
+ *   - smoltdfx_clear()    fast-fill the framebuffer
+ *   - smoltdfx_present()  swap-buffer at vblank
+ *   - smoltdfx_vtx()/quad() feed the setup unit (Gouraud triangles)
+ *
+ * Register offsets and bitfields all come from <linux/tdfx3d.h>.
+ *
+ * Single translation unit only (uses file-static state).
+ */
+#ifndef SMOLTDFX_H
+#define SMOLTDFX_H
+
+#include <linux/tdfx3d.h>
+#include <linux/fb.h>
+
+/* =============================== state =============================== */
+static volatile unsigned char *smoltdfx_regs;	/* BAR0 register aperture */
+static volatile unsigned short *smoltdfx_vram;	/* VRAM (via /dev/fbN) */
+static int smoltdfx_fd;				/* /dev/tdfx3d */
+static unsigned int smoltdfx_W, smoltdfx_H, smoltdfx_stride;/* mode from fbdev */
+static unsigned int smoltdfx_front, smoltdfx_back, smoltdfx_aux;/* buffer offsets */
+static unsigned int smoltdfx_cur;			/* which buffer is the back one */
+static unsigned int smoltdfx_fbz;			/* shadow of fbzMode */
+
+/* ---------------------- low-level register access -------------------- */
+static inline void smoltdfx_w3(unsigned int off, unsigned int v)
+{
+	*(volatile unsigned int *)(smoltdfx_regs + TDFX_3D_BASE + off) = v;
+}
+static inline unsigned int smoltdfx_rio(unsigned int off)
+{
+	return *(volatile unsigned int *)(smoltdfx_regs + TDFX_IO_BASE + off);
+}
+static inline void smoltdfx_wf(unsigned int off, float f)
+{
+	union { float f; unsigned int u; } c;
+
+	c.f = f;
+	smoltdfx_w3(off, c.u);
+}
+
+/* --------------------------- freestanding math ---------------------- */
+static inline float smoltdfx_fabs(float x)
+{
+	return x < 0 ? -x : x;
+}
+static inline float smoltdfx_sin(float x)
+{
+	const float PI = 3.14159265f, TWO_PI = 6.2831853f;
+	float y;
+
+	while (x < -PI)
+		x += TWO_PI;
+	while (x >  PI)
+		x -= TWO_PI;
+	y = 1.27323954f * x - 0.405284735f * x * smoltdfx_fabs(x);
+	return 0.225f * (y * smoltdfx_fabs(y) - y) + y;
+}
+static inline float smoltdfx_cos(float x)
+{
+	return smoltdfx_sin(x + 1.5707963f);
+}
+static inline float smoltdfx_sqrt(float x)
+{
+	union { float f; int i; } u;
+	float y;
+
+	if (x <= 0)
+		return 0;
+	u.f = x; u.i = 0x5f3759df - (u.i >> 1);
+	y = u.f; y = y * (1.5f - 0.5f * x * y * y);
+	y = y * (1.5f - 0.5f * x * y * y);
+	return x * y;			/* x * rsqrt(x) = sqrt(x) */
+}
+static inline unsigned int smoltdfx_rgb565(unsigned int r, unsigned int g, unsigned int b)
+{
+	return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+}
+
+/* ---------------------------- lifecycle ------------------------------ */
+/*
+ * Open the register device + the framebuffer VRAM, learn the mode the
+ * fbdev is in, lay out front/back/depth buffers, and program the common
+ * 3D state.  Returns 0 on success, -1 on failure.
+ */
+static int smoltdfx_init(const char *regdev, const char *fbdev)
+{
+	struct fb_fix_screeninfo fix;
+	int ffd;
+
+	smoltdfx_fd = open(regdev, O_RDWR);
+	if (smoltdfx_fd < 0)
+		return -1;
+	smoltdfx_regs = mmap(0, 0x400000, PROT_READ | PROT_WRITE, MAP_SHARED,
+			     smoltdfx_fd, 0);
+	if (smoltdfx_regs == (void *)-1)
+		return -1;
+
+	ffd = open(fbdev, O_RDWR);
+	if (ffd < 0)
+		return -1;
+	if (ioctl(ffd, FBIOGET_FSCREENINFO, &fix))
+		return -1;
+	smoltdfx_vram = mmap(0, fix.smem_len, PROT_READ | PROT_WRITE,
+			     MAP_SHARED, ffd, 0);
+	if (smoltdfx_vram == (void *)-1)
+		return -1;
+
+	smoltdfx_W = smoltdfx_rio(TDFX_IO_VIDSCREENSIZE) & 0xfff;
+	smoltdfx_H = (smoltdfx_rio(TDFX_IO_VIDSCREENSIZE) >> 12) & 0xfff;
+	smoltdfx_stride = smoltdfx_rio(TDFX_IO_VIDDESKSTRIDE) & 0x7fff;
+	if (!smoltdfx_W || !smoltdfx_H || !smoltdfx_stride)
+		return -1;
+
+	smoltdfx_front = 0;
+	smoltdfx_back  = smoltdfx_H * smoltdfx_stride;
+	smoltdfx_aux   = 2 * smoltdfx_back;
+	smoltdfx_cur   = 1;		/* render to the back buffer first */
+
+	smoltdfx_w3(TDFX_3D_COLBUFFERSTRIDE, smoltdfx_stride);
+	smoltdfx_w3(TDFX_3D_AUXBUFFERADDR, smoltdfx_aux);
+	smoltdfx_w3(TDFX_3D_AUXBUFFERSTRIDE, smoltdfx_stride);
+	smoltdfx_w3(TDFX_3D_CLIPLEFTRIGHT, smoltdfx_W);
+	smoltdfx_w3(TDFX_3D_CLIPBOTTOMTOP, smoltdfx_H);
+	smoltdfx_w3(TDFX_3D_FBZCOLORPATH, TDFX_CP_RGB_ITERATED);
+	smoltdfx_w3(TDFX_3D_ALPHAMODE, 0);
+	smoltdfx_w3(TDFX_3D_FOGMODE, 0);
+	smoltdfx_fbz = TDFX_FBZ_RGBWRMASK |
+		       (TDFX_ZF_GT << TDFX_FBZ_ZFUNC_SHIFT);
+	smoltdfx_w3(TDFX_3D_FBZMODE, smoltdfx_fbz);
+	return 0;
+}
+
+/* target the back (render) colour buffer */
+static inline void smoltdfx_target(void)
+{ smoltdfx_w3(TDFX_3D_COLBUFFERADDR,
+	      smoltdfx_cur ? smoltdfx_back : smoltdfx_front); }
+
+/* fast-fill the clip rectangle with an ARGB colour and a depth value */
+static inline void smoltdfx_clear(unsigned int argb, unsigned int depth)
+{
+	smoltdfx_w3(TDFX_3D_C1, argb);
+	smoltdfx_w3(TDFX_3D_ZACOLOR, depth & 0xffff);
+	smoltdfx_w3(TDFX_3D_FASTFILLCMD, 1);
+}
+
+/* present the back buffer at the next vblank and flip */
+static inline void smoltdfx_present(void)
+{
+	smoltdfx_w3(TDFX_3D_SWAPBUFFERCMD, TDFX_SWAP_WAIT_VSYNC);
+	ioctl(smoltdfx_fd, TDFX3D_WAIT_VBLANK, 0);
+	smoltdfx_cur ^= 1;
+	smoltdfx_target();
+}
+
+/* ------------------------- fbzMode state ----------------------------- */
+static inline void smoltdfx_fbz_bit(unsigned int mask, int on)
+{
+	if (on)
+		smoltdfx_fbz |= mask;
+	else
+		smoltdfx_fbz &= ~mask;
+	smoltdfx_w3(TDFX_3D_FBZMODE, smoltdfx_fbz);
+}
+static inline void smoltdfx_zfunc(unsigned int func)
+{
+	smoltdfx_fbz = (smoltdfx_fbz & ~TDFX_FBZ_ZFUNC_MASK) |
+		       ((func & 7) << TDFX_FBZ_ZFUNC_SHIFT);
+	smoltdfx_w3(TDFX_3D_FBZMODE, smoltdfx_fbz);
+}
+static inline void smoltdfx_clip(int x0, int y0, int x1, int y1)
+{
+	smoltdfx_w3(TDFX_3D_CLIPLEFTRIGHT, ((x0 & 0x3ff) << 16) | (x1 & 0x3ff));
+	smoltdfx_w3(TDFX_3D_CLIPBOTTOMTOP, ((y0 & 0x3ff) << 16) | (y1 & 0x3ff));
+	smoltdfx_fbz_bit(TDFX_FBZ_ENCLIP, 1);
+}
+static inline void smoltdfx_clip_off(void)
+{
+	smoltdfx_fbz_bit(TDFX_FBZ_ENCLIP, 0);
+}
+/*
+ * Reset the clip rectangle to the whole screen and disable clipping.  The
+ * fast-fill command fills the CLIP RECTANGLE (not the whole buffer), so a
+ * full-screen clear must set this first.
+ */
+static inline void smoltdfx_clip_full(void)
+{
+	smoltdfx_w3(TDFX_3D_CLIPLEFTRIGHT, smoltdfx_W);
+	smoltdfx_w3(TDFX_3D_CLIPBOTTOMTOP, smoltdfx_H);
+	smoltdfx_fbz_bit(TDFX_FBZ_ENCLIP, 0);
+}
+
+/* --------------------------- geometry -------------------------------- */
+static inline void smoltdfx_setupmode(unsigned int mode)
+{
+	smoltdfx_w3(TDFX_3D_SSETUPMODE, mode);
+}
+
+/* one setup-unit vertex (texcoords are ignored until texturing is on) */
+static inline void smoltdfx_vtx(float x, float y, float z, unsigned int argb,
+				float s, float t, float w, int first)
+{
+	smoltdfx_wf(TDFX_3D_SVX, x);
+	smoltdfx_wf(TDFX_3D_SVY, y);
+	smoltdfx_wf(TDFX_3D_SVZ, z);
+	smoltdfx_wf(TDFX_3D_SWOOWFBI, w);
+	smoltdfx_w3(TDFX_3D_SARGB, argb);
+	smoltdfx_wf(TDFX_3D_SSOW0, s);
+	smoltdfx_wf(TDFX_3D_STOW0, t);
+	smoltdfx_w3(first ? TDFX_3D_SBEGINTRICMD : TDFX_3D_SDRAWTRICMD, 1);
+}
+
+/*
+ * Draw an axis-aligned quad as two independent triangles (each begun with
+ * its own SBEGIN), so it does not depend on the setup unit's strip/fan
+ * vertex assembly.  Corner colours (Gouraud) via the named args; pass
+ * texel span (s1,t1) = 0 for untextured.
+ */
+static inline void smoltdfx_quad(float x0, float y0, float x1, float y1,
+				 unsigned int cTL, unsigned int cBL,
+				 unsigned int cTR, unsigned int cBR,
+				 float s1, float t1)
+{
+	smoltdfx_vtx(x0, y0, 1.0f, cTL, 0,  0,  1.0f, 1);	/* TL */
+	smoltdfx_vtx(x1, y0, 1.0f, cTR, s1, 0,  1.0f, 0);	/* TR */
+	smoltdfx_vtx(x1, y1, 1.0f, cBR, s1, t1, 1.0f, 0);	/* BR */
+
+	smoltdfx_vtx(x0, y0, 1.0f, cTL, 0,  0,  1.0f, 1);	/* TL */
+	smoltdfx_vtx(x1, y1, 1.0f, cBR, s1, t1, 1.0f, 0);	/* BR */
+	smoltdfx_vtx(x0, y1, 1.0f, cBL, 0,  t1, 1.0f, 0);	/* BL */
+}
+
+#endif /* SMOLTDFX_H */
