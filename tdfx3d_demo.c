@@ -8,6 +8,8 @@
  *   grid   - a grid of tiles, each exercising one feature: flat, Gouraud,
  *            depth cube, point/bilinear textures, the ARGB4444/1555/RGB332
  *            formats, an 8bpp palette and an NCC/YIQ table
+ *   twod   - the 2D engine: rectangle fills and screen-to-screen blits
+ *   clamp  - texture coordinate wrap versus clamp, side by side
  *
  * At start-up it renders one canonical frame (a fixed animation phase) of
  * the selected scene and prints a digest of it to the serial console,
@@ -15,7 +17,7 @@
  * grid) lets a QEMU run and a real-hardware run be compared, and the
  * selectable scenes make per-feature regression testing possible.
  *
- * Usage: tdfx3d_demo [/dev/tdfx3d] [/dev/fb0] [basic|cubes|grid] [dump]
+ * Usage: tdfx3d_demo [/dev/tdfx3d] [/dev/fb0] [basic|cubes|grid|twod|clamp] [dump]
  *
  * Freestanding (nolibc); build with the Makefile here.  Boot the card
  * with e.g. tdfxfb.mode_option=640x480-16@60 (RGB565, fb at VRAM 0).
@@ -28,7 +30,7 @@
 #define TEXCP		(TDFX_CP_RGB_TEXTURE | TDFX_CP_TEXTURE_EN)
 #define CANON_T		1.234f		/* canonical animation phase */
 
-enum { SC_BASIC, SC_CUBES, SC_GRID };
+enum { SC_BASIC, SC_CUBES, SC_GRID, SC_TWOD, SC_CLAMP };
 
 /* ============================ scene: basic ========================== */
 static void scene_basic(float t)
@@ -488,6 +490,60 @@ static void scene_grid(float t)
 		draw_tile(i, t);
 }
 
+/* =========================== scene: twod =========================== */
+/* the 2D engine on its own: rectangle fills and screen-to-screen blits */
+static void scene_twod(float t)
+{
+	static const unsigned short bar[6] = {
+		0xf800, 0xfd20, 0xffe0, 0x07e0, 0x001f, 0xf81f,
+	};
+	int W = smoltdfx_W, H = smoltdfx_H, bw = W / 6, s = H / 4, i;
+	int sx = 40, sy = H / 2;
+
+	smoltdfx_target();
+	smoltdfx_clip_full();
+	smoltdfx_clear(0xff101018, 0xffff);
+
+	/* a row of solid colour bars, each a rectangle fill */
+	for (i = 0; i < 6; i++)
+		smoltdfx_rectfill(i * bw, 0, bw - 2, s, bar[i]);
+
+	/* a Gouraud source block, then screen-to-screen copies of it */
+	smoltdfx_setupmode(SM_BASE);
+	smoltdfx_quad(sx, sy, sx + s, sy + s, 0xffff0000, 0xff0000ff,
+		      0xff00ff00, 0xffffff00, 0, 0);
+	for (i = 1; i <= 3; i++) {
+		int dx = sx + i * (s + 20);
+		int dy = sy + (int)(20.0f * smoltdfx_sin(t + i));
+
+		smoltdfx_blt_s2s(sx, sy, dx, dy, s, s);
+	}
+}
+
+/* =========================== scene: clamp ========================== */
+/* texture coordinates run 0..2: wrap repeats the texture, clamp holds edge */
+static void scene_clamp(float t)
+{
+	int W = smoltdfx_W, H = smoltdfx_H;
+	float mid = W * 0.5f;
+
+	(void)t;
+	smoltdfx_target();
+	smoltdfx_clip_full();
+	smoltdfx_clear(0xff101018, 0xffff);
+
+	/* left half: wrap (default) - the sprite tiles 2x2 */
+	smoltdfx_tex(TX_SPRITE, TDFX_TFMT_RGB565, 0, SMOLTDFX_TC_PASS, TEXCP);
+	smoltdfx_setupmode(SM_TEX);
+	smoltdfx_quad(0, 0, mid - 2, H, -1, -1, -1, -1, 512, 512);
+
+	/* right half: clamp - one sprite, its edge texels stretched outward */
+	smoltdfx_tex(TX_SPRITE, TDFX_TFMT_RGB565,
+		     TDFX_TEX_CLAMPS | TDFX_TEX_CLAMPT, SMOLTDFX_TC_PASS, TEXCP);
+	smoltdfx_setupmode(SM_TEX);
+	smoltdfx_quad(mid, 0, W, H, -1, -1, -1, -1, 512, 512);
+}
+
 /* ------------------------------ driver ------------------------------- */
 static void draw_scene(int scene, float t)
 {
@@ -495,6 +551,10 @@ static void draw_scene(int scene, float t)
 		scene_basic(t);
 	else if (scene == SC_CUBES)
 		scene_cubes(t);
+	else if (scene == SC_TWOD)
+		scene_twod(t);
+	else if (scene == SC_CLAMP)
+		scene_clamp(t);
 	else
 		scene_grid(t);
 }
@@ -525,6 +585,12 @@ int main(int argc, char **argv)
 		} else if (streq(argv[i], "grid")) {
 			scene = SC_GRID;
 			tag = "grid";
+		} else if (streq(argv[i], "twod")) {
+			scene = SC_TWOD;
+			tag = "twod";
+		} else if (streq(argv[i], "clamp")) {
+			scene = SC_CLAMP;
+			tag = "clamp";
 		} else if (streq(argv[i], "dump")) {
 			do_ppm = 1;
 		} else if (npos++ == 0) {
@@ -543,7 +609,7 @@ int main(int argc, char **argv)
 		for (;;)
 			usleep(1000000);
 	}
-	if (scene == SC_GRID)
+	if (scene == SC_GRID || scene == SC_CLAMP)
 		gen_textures();
 
 	/* canonical frame + digest for QEMU-vs-hardware comparison */
