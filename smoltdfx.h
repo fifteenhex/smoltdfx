@@ -305,6 +305,46 @@ static inline void smoltdfx_fog_off(void)
 	smoltdfx_w3(TDFX_3D_FOGMODE, 0);
 }
 
+/* ------------------------- raster ops -------------------------------- */
+static inline void smoltdfx_dither(int on, int twobytwo)
+{
+	if (twobytwo)
+		smoltdfx_fbz |= TDFX_FBZ_DITHER2X2;
+	else
+		smoltdfx_fbz &= ~TDFX_FBZ_DITHER2X2;
+	smoltdfx_fbz_bit(TDFX_FBZ_ENDITHER, on);
+}
+
+static inline void smoltdfx_chroma(int on, unsigned int key)
+{
+	smoltdfx_w3(TDFX_3D_CHROMAKEY, key & 0xffffff);
+	smoltdfx_fbz_bit(TDFX_FBZ_ENCHROMAKEY, on);
+}
+
+static inline void smoltdfx_stipple(int on, unsigned int pattern)
+{
+	smoltdfx_w3(TDFX_3D_STIPPLE, pattern);
+	if (on)
+		smoltdfx_fbz |= TDFX_FBZ_STIPPLEPATTERN;	/* 4x4 mode */
+	smoltdfx_fbz_bit(TDFX_FBZ_ENSTIPPLE, on);
+}
+
+/*
+ * Y-origin swap: flip the vertical axis about miscInit0[29:18].  Enabling
+ * it loads the pivot with screenHeight-1 (read-modify-write to keep the
+ * memory-config bits).
+ */
+static inline void smoltdfx_yorigin(int on)
+{
+	if (on) {
+		volatile unsigned int *m = (volatile unsigned int *)
+			(smoltdfx_regs + TDFX_IO_BASE + TDFX_IO_MISCINIT0);
+
+		*m = (*m & ~(0xfffu << 18)) | ((smoltdfx_H - 1) << 18);
+	}
+	smoltdfx_fbz_bit(TDFX_FBZ_YORIGIN, on);
+}
+
 /* --------------------------- geometry -------------------------------- */
 static inline void smoltdfx_setupmode(unsigned int mode)
 {
