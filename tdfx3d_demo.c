@@ -13,6 +13,7 @@
  *   texfmt - one tile per remaining texture format (I8/A8/AI44/AI88/
  *            ARGB8332/AYIQ/AP88/P8_RGBA)
  *   fog    - the fog factor sources: eye-W table, alpha, Z, constant
+ *   minif  - mip LOD selection: the texture drawn at shrinking sizes
  *
  * At start-up it renders one canonical frame (a fixed animation phase) of
  * the selected scene and prints a digest of it to the serial console,
@@ -20,7 +21,7 @@
  * grid) lets a QEMU run and a real-hardware run be compared, and the
  * selectable scenes make per-feature regression testing possible.
  *
- * Usage: tdfx3d_demo [/dev/tdfx3d] [/dev/fb0] [basic|cubes|grid|twod|clamp|texfmt|fog] [dump]
+ * Usage: tdfx3d_demo [/dev/tdfx3d] [/dev/fb0] [basic|cubes|grid|twod|clamp|texfmt|fog|minif] [dump]
  *
  * Freestanding (nolibc); build with the Makefile here.  Boot the card
  * with e.g. tdfxfb.mode_option=640x480-16@60 (RGB565, fb at VRAM 0).
@@ -33,7 +34,10 @@
 #define TEXCP		(TDFX_CP_RGB_TEXTURE | TDFX_CP_TEXTURE_EN)
 #define CANON_T		1.234f		/* canonical animation phase */
 
-enum { SC_BASIC, SC_CUBES, SC_GRID, SC_TWOD, SC_CLAMP, SC_TEXFMT, SC_FOG };
+enum {
+	SC_BASIC, SC_CUBES, SC_GRID, SC_TWOD, SC_CLAMP, SC_TEXFMT, SC_FOG,
+	SC_MINIF
+};
 
 /* ============================ scene: basic ========================== */
 static void scene_basic(float t)
@@ -141,6 +145,7 @@ static void scene_cubes(float t)
 #define TX_AYIQ		TEX(14)		/* 16bpp alpha(8) NCC */
 #define TX_AP88		TEX(15)		/* 16bpp alpha(8) palette(8) */
 #define TX_PRGBA	TEX(16)		/* 8bpp palette -> rgba */
+#define TX_MIP		0x600000u	/* mip chain: one solid colour per level */
 
 static volatile unsigned short *tx16(unsigned int off)
 {
@@ -294,6 +299,32 @@ static void gen_texfmt(void)
 			tx16(TX_AP88)[j] = (0xffu << 8) | band;
 			tx8(TX_PRGBA)[j] = band;
 		}
+	}
+}
+
+/*
+ * A mip chain with a distinct solid colour per level, packed level after
+ * level (the linear layout the hardware expects): level L is a 256>>L
+ * square, so the level the sampler picks under minification shows as that
+ * level's colour.
+ */
+static void gen_mip(void)
+{
+	static const unsigned int col[5] = {
+		0xff0000, 0x00ff00, 0x0000ff, 0xffff00, 0xff00ff,
+	};
+	unsigned int off = TX_MIP;
+	int lvl, n, dim;
+
+	for (lvl = 0; lvl < 5; lvl++) {
+		unsigned short c = smoltdfx_rgb565((col[lvl] >> 16) & 0xff,
+						   (col[lvl] >> 8) & 0xff,
+						   col[lvl] & 0xff);
+
+		dim = 256 >> lvl;
+		for (n = 0; n < dim * dim; n++)
+			tx16(off)[n] = c;
+		off += dim * dim * 2;
 	}
 }
 
@@ -677,6 +708,35 @@ static void scene_fog(float t)
 	smoltdfx_fog_off();
 }
 
+/* =========================== scene: minif ========================= */
+/*
+ * Minification / mip LOD selection: draw the same mipmapped texture at
+ * shrinking sizes.  Mapping the whole texture across an s-pixel square
+ * minifies it by 256/s, so the sampler steps up one mip level each time s
+ * halves, and each square shows that level's solid colour.
+ */
+static void scene_minif(float t)
+{
+	static const int size[5] = { 256, 128, 64, 32, 16 };
+	int H = smoltdfx_H, x = 20, y = H / 3, i;
+
+	(void)t;
+	smoltdfx_target();
+	smoltdfx_clip_full();
+	smoltdfx_clear(0xff101018, 0xffff);
+
+	smoltdfx_tex(TX_MIP, TDFX_TFMT_RGB565,
+		     TDFX_TEX_MINFILTER | TDFX_TEX_MAGFILTER, SMOLTDFX_TC_PASS,
+		     TEXCP);
+	smoltdfx_lod(0, 4);
+	for (i = 0; i < 5; i++) {
+		smoltdfx_setupmode(SM_TEX);
+		smoltdfx_quad(x, y, x + size[i], y + size[i],
+			      -1, -1, -1, -1, 256, 256);
+		x += size[i] + 10;
+	}
+}
+
 /* ------------------------------ driver ------------------------------- */
 static void draw_scene(int scene, float t)
 {
@@ -692,6 +752,8 @@ static void draw_scene(int scene, float t)
 		scene_texfmt(t);
 	else if (scene == SC_FOG)
 		scene_fog(t);
+	else if (scene == SC_MINIF)
+		scene_minif(t);
 	else
 		scene_grid(t);
 }
@@ -734,6 +796,9 @@ int main(int argc, char **argv)
 		} else if (streq(argv[i], "fog")) {
 			scene = SC_FOG;
 			tag = "fog";
+		} else if (streq(argv[i], "minif")) {
+			scene = SC_MINIF;
+			tag = "minif";
 		} else if (streq(argv[i], "dump")) {
 			do_ppm = 1;
 		} else if (npos++ == 0) {
@@ -756,6 +821,8 @@ int main(int argc, char **argv)
 		gen_textures();
 	if (scene == SC_TEXFMT)
 		gen_texfmt();
+	if (scene == SC_MINIF)
+		gen_mip();
 
 	/* canonical frame + digest for QEMU-vs-hardware comparison */
 	draw_scene(scene, CANON_T);
