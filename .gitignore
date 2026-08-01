@@ -1,0 +1,5 @@
+tdfx3d_demo
+*.o
+*.png
+*.ppm
+!doc/screenshot.png
