@@ -14,6 +14,7 @@
  *            ARGB8332/AYIQ/AP88/P8_RGBA)
  *   fog    - the fog factor sources: eye-W table, alpha, Z, constant
  *   minif  - mip LOD selection: the texture drawn at shrinking sizes
+ *   lines  - line and point primitives: a starburst, thin lines, points
  *
  * At start-up it renders one canonical frame (a fixed animation phase) of
  * the selected scene and prints a digest of it to the serial console,
@@ -21,7 +22,8 @@
  * grid) lets a QEMU run and a real-hardware run be compared, and the
  * selectable scenes make per-feature regression testing possible.
  *
- * Usage: tdfx3d_demo [/dev/tdfx3d] [/dev/fb0] [basic|cubes|grid|twod|clamp|texfmt|fog|minif] [dump]
+ * Usage: tdfx3d_demo [/dev/tdfx3d] [/dev/fb0] [<scene>] [dump]
+ *   <scene> = basic|cubes|grid|twod|clamp|texfmt|fog|minif|lines
  *
  * Freestanding (nolibc); build with the Makefile here.  Boot the card
  * with e.g. tdfxfb.mode_option=640x480-16@60 (RGB565, fb at VRAM 0).
@@ -36,7 +38,7 @@
 
 enum {
 	SC_BASIC, SC_CUBES, SC_GRID, SC_TWOD, SC_CLAMP, SC_TEXFMT, SC_FOG,
-	SC_MINIF
+	SC_MINIF, SC_LINES
 };
 
 /* ============================ scene: basic ========================== */
@@ -737,6 +739,44 @@ static void scene_minif(float t)
 	}
 }
 
+/* =========================== scene: lines ========================= */
+/*
+ * Lines and points (both built from triangles by smoltdfx_line/point): a
+ * rotating colour starburst, a set of thin axis-aligned and diagonal
+ * lines to check thin-line rasterisation, and a row of growing points.
+ */
+static void scene_lines(float t)
+{
+	static const unsigned int col[6] = {
+		0xffff0000, 0xffffff00, 0xff00ff00,
+		0xff00ffff, 0xff0000ff, 0xffff00ff,
+	};
+	int W = smoltdfx_W, H = smoltdfx_H, i;
+	float cx = W * 0.5f, cy = H * 0.4f, r = H * 0.33f;
+
+	smoltdfx_target();
+	smoltdfx_clip_full();
+	smoltdfx_clear(0xff101018, 0xffff);
+	smoltdfx_setupmode(SM_BASE);
+
+	/* rotating starburst of colour lines */
+	for (i = 0; i < 24; i++) {
+		float a = t + i * (6.2831853f / 24);
+
+		smoltdfx_line(cx, cy, cx + r * smoltdfx_cos(a),
+			      cy + r * smoltdfx_sin(a), 2.0f, col[i % 6]);
+	}
+
+	/* thin 1px lines: horizontal, vertical, diagonal */
+	smoltdfx_line(40, 40, W - 40, 40, 1.0f, 0xffffffff);
+	smoltdfx_line(40, 40, 40, H - 60, 1.0f, 0xffffffff);
+	smoltdfx_line(40, 40, 200, H - 60, 1.0f, 0xff80ff80);
+
+	/* a row of points of growing size */
+	for (i = 0; i < 10; i++)
+		smoltdfx_point(80 + i * 56, H - 30, 2.0f + i * 2.0f, 0xffffffff);
+}
+
 /* ------------------------------ driver ------------------------------- */
 static void draw_scene(int scene, float t)
 {
@@ -754,6 +794,8 @@ static void draw_scene(int scene, float t)
 		scene_fog(t);
 	else if (scene == SC_MINIF)
 		scene_minif(t);
+	else if (scene == SC_LINES)
+		scene_lines(t);
 	else
 		scene_grid(t);
 }
@@ -799,6 +841,9 @@ int main(int argc, char **argv)
 		} else if (streq(argv[i], "minif")) {
 			scene = SC_MINIF;
 			tag = "minif";
+		} else if (streq(argv[i], "lines")) {
+			scene = SC_LINES;
+			tag = "lines";
 		} else if (streq(argv[i], "dump")) {
 			do_ppm = 1;
 		} else if (npos++ == 0) {
