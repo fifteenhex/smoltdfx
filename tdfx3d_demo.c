@@ -10,6 +10,8 @@
  *            formats, an 8bpp palette and an NCC/YIQ table
  *   twod   - the 2D engine: rectangle fills and screen-to-screen blits
  *   clamp  - texture coordinate wrap versus clamp, side by side
+ *   texfmt - one tile per remaining texture format (I8/A8/AI44/AI88/
+ *            ARGB8332/AYIQ/AP88/P8_RGBA)
  *
  * At start-up it renders one canonical frame (a fixed animation phase) of
  * the selected scene and prints a digest of it to the serial console,
@@ -17,7 +19,7 @@
  * grid) lets a QEMU run and a real-hardware run be compared, and the
  * selectable scenes make per-feature regression testing possible.
  *
- * Usage: tdfx3d_demo [/dev/tdfx3d] [/dev/fb0] [basic|cubes|grid|twod|clamp] [dump]
+ * Usage: tdfx3d_demo [/dev/tdfx3d] [/dev/fb0] [basic|cubes|grid|twod|clamp|texfmt] [dump]
  *
  * Freestanding (nolibc); build with the Makefile here.  Boot the card
  * with e.g. tdfxfb.mode_option=640x480-16@60 (RGB565, fb at VRAM 0).
@@ -30,7 +32,7 @@
 #define TEXCP		(TDFX_CP_RGB_TEXTURE | TDFX_CP_TEXTURE_EN)
 #define CANON_T		1.234f		/* canonical animation phase */
 
-enum { SC_BASIC, SC_CUBES, SC_GRID, SC_TWOD, SC_CLAMP };
+enum { SC_BASIC, SC_CUBES, SC_GRID, SC_TWOD, SC_CLAMP, SC_TEXFMT };
 
 /* ============================ scene: basic ========================== */
 static void scene_basic(float t)
@@ -130,6 +132,14 @@ static void scene_cubes(float t)
 #define TX_BILIN	TEX(6)
 #define TX_LIGHT	TEX(7)		/* radial light map (multitexture) */
 #define TX_SPRITE	TEX(8)		/* cyan diamond on magenta (chroma) */
+#define TX_I8		TEX(9)		/* 8bpp intensity */
+#define TX_A8		TEX(10)		/* 8bpp alpha (rgb = alpha) */
+#define TX_AI44		TEX(11)		/* 8bpp alpha(4) intensity(4) */
+#define TX_AI88		TEX(12)		/* 16bpp alpha(8) intensity(8) */
+#define TX_8332		TEX(13)		/* 16bpp argb 8-3-3-2 */
+#define TX_AYIQ		TEX(14)		/* 16bpp alpha(8) NCC */
+#define TX_AP88		TEX(15)		/* 16bpp alpha(8) palette(8) */
+#define TX_PRGBA	TEX(16)		/* 8bpp palette -> rgba */
 
 static volatile unsigned short *tx16(unsigned int off)
 {
@@ -256,6 +266,71 @@ static void gen_textures(void)
 				(dx + dy < 96) ? smoltdfx_rgb565(0, 220, 255)
 					       : smoltdfx_rgb565(255, 0, 255);
 		}
+	}
+}
+
+/*
+ * Textures for the extra pixel formats.  Each is a horizontal ramp of the
+ * format's value (intensity, 3-3-2 colour, or NCC/palette index, whose
+ * tables gen_textures() sets up), so a tile sweeps every value the format
+ * can carry left to right.  Alpha is left at full.
+ */
+static void gen_texfmt(void)
+{
+	int u, v, j;
+
+	for (v = 0; v < TEXW; v++) {
+		for (u = 0; u < TEXW; u++) {
+			j = v * TEXW + u;
+			int band = (u >> 5) << 5;	/* 8 wide value bands */
+
+			tx8(TX_I8)[j] = u;
+			tx8(TX_A8)[j] = u;
+			tx8(TX_AI44)[j] = (0xf << 4) | (u >> 4);
+			tx16(TX_AI88)[j] = (0xff << 8) | u;
+			tx16(TX_8332)[j] = (0xffu << 8) | band;
+			tx16(TX_AYIQ)[j] = (0xffu << 8) | band;
+			tx16(TX_AP88)[j] = (0xffu << 8) | band;
+			tx8(TX_PRGBA)[j] = band;
+		}
+	}
+}
+
+/* =========================== scene: texfmt ========================= */
+/* one tile per otherwise-untested texture format, showing its decode */
+static const struct {
+	unsigned int base;
+	int fmt;
+} texfmt_tiles[8] = {
+	{ TX_I8,	TDFX_TFMT_I8 },
+	{ TX_A8,	TDFX_TFMT_A8 },
+	{ TX_AI44,	TDFX_TFMT_AI44 },
+	{ TX_AI88,	TDFX_TFMT_AI88 },
+	{ TX_8332,	TDFX_TFMT_ARGB8332 },
+	{ TX_AYIQ,	TDFX_TFMT_AYIQ },
+	{ TX_AP88,	TDFX_TFMT_AP88 },
+	{ TX_PRGBA,	TDFX_TFMT_P8_RGBA },
+};
+
+static void scene_texfmt(float t)
+{
+	int W = smoltdfx_W, H = smoltdfx_H, cw = W / 4, ch = H / 2, i;
+
+	(void)t;
+	smoltdfx_target();
+	smoltdfx_clip_full();
+	smoltdfx_clear(0xff101018, 0xffff);
+
+	for (i = 0; i < 8; i++) {
+		int col = i & 3, row = i >> 2;
+		int x0 = col * cw + 3, y0 = row * ch + 3;
+		int x1 = (col + 1) * cw - 3, y1 = (row + 1) * ch - 3;
+
+		smoltdfx_clip(x0, y0, x1, y1);
+		smoltdfx_tex(texfmt_tiles[i].base, texfmt_tiles[i].fmt, 0,
+			     SMOLTDFX_TC_PASS, TEXCP);
+		smoltdfx_setupmode(SM_TEX);
+		smoltdfx_quad(x0, y0, x1, y1, -1, -1, -1, -1, 256, 256);
 	}
 }
 
@@ -555,6 +630,8 @@ static void draw_scene(int scene, float t)
 		scene_twod(t);
 	else if (scene == SC_CLAMP)
 		scene_clamp(t);
+	else if (scene == SC_TEXFMT)
+		scene_texfmt(t);
 	else
 		scene_grid(t);
 }
@@ -591,6 +668,9 @@ int main(int argc, char **argv)
 		} else if (streq(argv[i], "clamp")) {
 			scene = SC_CLAMP;
 			tag = "clamp";
+		} else if (streq(argv[i], "texfmt")) {
+			scene = SC_TEXFMT;
+			tag = "texfmt";
 		} else if (streq(argv[i], "dump")) {
 			do_ppm = 1;
 		} else if (npos++ == 0) {
@@ -609,8 +689,10 @@ int main(int argc, char **argv)
 		for (;;)
 			usleep(1000000);
 	}
-	if (scene == SC_GRID || scene == SC_CLAMP)
+	if (scene == SC_GRID || scene == SC_CLAMP || scene == SC_TEXFMT)
 		gen_textures();
+	if (scene == SC_TEXFMT)
+		gen_texfmt();
 
 	/* canonical frame + digest for QEMU-vs-hardware comparison */
 	draw_scene(scene, CANON_T);

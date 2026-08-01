@@ -18,9 +18,9 @@ The demo has selectable scenes:
 |:---:|:---:|:---:|
 | ![basic scene](doc/basic.png) | ![cubes scene](doc/cubes.png) | ![grid scene](doc/grid.png) |
 
-| `twod` | `clamp` |
-|:---:|:---:|
-| ![twod scene](doc/twod.png) | ![clamp scene](doc/clamp.png) |
+| `twod` | `clamp` | `texfmt` |
+|:---:|:---:|:---:|
+| ![twod scene](doc/twod.png) | ![clamp scene](doc/clamp.png) | ![texfmt scene](doc/texfmt.png) |
 
 ## Layout
 
