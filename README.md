@@ -22,9 +22,9 @@ The demo has selectable scenes:
 |:---:|:---:|:---:|
 | ![twod scene](doc/twod.png) | ![clamp scene](doc/clamp.png) | ![texfmt scene](doc/texfmt.png) |
 
-| `fog` |
-|:---:|
-| ![fog scene](doc/fog.png) |
+| `fog` | `minif` |
+|:---:|:---:|
+| ![fog scene](doc/fog.png) | ![minif scene](doc/minif.png) |
 
 ## Layout
 
