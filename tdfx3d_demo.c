@@ -24,6 +24,7 @@
 
 #define SM_BASE		(TDFX_SSETUP_RGB | TDFX_SSETUP_Z | TDFX_SSETUP_WFBI)
 #define SM_TEX		(SM_BASE | TDFX_SSETUP_ST0)
+#define SM_A		(SM_BASE | TDFX_SSETUP_ALPHA)
 #define TEXCP		(TDFX_CP_RGB_TEXTURE | TDFX_CP_TEXTURE_EN)
 #define CANON_T		1.234f		/* canonical animation phase */
 
@@ -125,6 +126,7 @@ static void scene_cubes(float t)
 #define TX_PAL		TEX(4)		/* 8bpp palette indices */
 #define TX_NCC		TEX(5)		/* 8bpp NCC indices */
 #define TX_BILIN	TEX(6)
+#define TX_LIGHT	TEX(7)		/* radial light map (multitexture) */
 
 static volatile unsigned short *tx16(unsigned int off)
 {
@@ -225,13 +227,25 @@ static void gen_textures(void)
 	p[1] = smoltdfx_rgb565(0, 255, 0);
 	p[TEXW] = smoltdfx_rgb565(0, 0, 255);
 	p[TEXW + 1] = smoltdfx_rgb565(255, 255, 255);
+
+	/* radial light map (grayscale) for the multitexture tile */
+	for (v = 0; v < TEXW; v++) {
+		for (u = 0; u < TEXW; u++) {
+			float dx = (u - 128) / 128.0f, dy = (v - 128) / 128.0f;
+			int l = (int)((1.0f - smoltdfx_sqrt(dx * dx + dy * dy)) * 255.0f);
+
+			if (l < 0)
+				l = 0;
+			tx16(TX_LIGHT)[v * TEXW + u] = smoltdfx_rgb565(l, l, l);
+		}
+	}
 }
 
 /* ============================ scene: grid =========================== */
 #define GX		5
 #define GY		4
 #define INSET		3
-#define NTILE		10		/* tiles implemented this revision */
+#define NTILE		16		/* tiles drawn this revision (13,14 still blank) */
 
 static void tile_rect(int idx, int *x0, int *y0, int *x1, int *y1)
 {
@@ -247,6 +261,9 @@ static void tile_rect(int idx, int *x0, int *y0, int *x1, int *y1)
 /* reset to a clean per-tile state, clipped to the tile */
 static void tile_begin(int x0, int y0, int x1, int y1)
 {
+	smoltdfx_alpha_off();
+	smoltdfx_fog_off();
+	smoltdfx_tex1_off();
 	smoltdfx_tex_off();
 	smoltdfx_fbz = TDFX_FBZ_RGBWRMASK | (TDFX_ZF_GT << TDFX_FBZ_ZFUNC_SHIFT);
 	smoltdfx_zfunc(7);			/* ALWAYS */
@@ -312,6 +329,58 @@ static void draw_tile(int idx, float t)
 		break;
 	case 9:	/* NCC (YIQ) */
 		smoltdfx_tex(TX_NCC, TDFX_TFMT_YIQ, 0, SMOLTDFX_TC_PASS, TEXCP);
+		smoltdfx_setupmode(SM_TEX);
+		smoltdfx_quad(fx0, fy0, fx1, fy1, -1, -1, -1, -1, 256, 256);
+		break;
+	case 10: {	/* alpha blend: translucent bar sliding over a checker */
+		float w = fx1 - fx0;
+		float bx = fx0 + (0.5f + 0.4f * smoltdfx_sin(t)) * w * 0.5f;
+
+		smoltdfx_tex(TX_CHECK, TDFX_TFMT_RGB565, 0, SMOLTDFX_TC_PASS, TEXCP);
+		smoltdfx_setupmode(SM_TEX);
+		smoltdfx_quad(fx0, fy0, fx1, fy1, -1, -1, -1, -1, 256, 256);
+		smoltdfx_tex_off();
+		smoltdfx_blend(TDFX_BLEND_SRCALPHA, TDFX_BLEND_OMSRCALPHA);
+		smoltdfx_setupmode(SM_A);
+		smoltdfx_quad(bx, fy0, bx + w * 0.35f, fy1, 0x80ffffff,
+			      0x80ffffff, 0x80ffffff, 0x80ffffff, 0, 0);
+		break;
+	}
+	case 11: {	/* alpha test: columns of pass (a>128) / fail alpha */
+		int k;
+		float w = (fx1 - fx0) / 6.0f;
+
+		smoltdfx_alpha_test(TDFX_ZF_GT, 128);	/* GREATER, ref = 128 */
+		smoltdfx_setupmode(SM_A);
+		for (k = 0; k < 6; k++) {
+			unsigned int a = (k & 1) ? 0xffu : 0x40u;
+			unsigned int c = (a << 24) | 0x0000ff00;	/* green */
+
+			smoltdfx_quad(fx0 + k * w, fy0, fx0 + (k + 1) * w, fy1,
+				      c, c, c, c, 0, 0);
+		}
+		break;
+	}
+	case 12:	/* table fog: near->far gradient (eye-W varies across x) */
+		smoltdfx_fog_table(0x2040ff);
+		smoltdfx_setupmode(SM_BASE);
+		/*
+		 * SWOOWFBI is 1/w; sweep 1.0 (near) -> 0.0002 (far) across x.
+		 * Two explicit triangles (per-vertex W rules out smoltdfx_quad)
+		 * so it does not depend on strip/fan assembly.
+		 */
+		smoltdfx_vtx(fx0, fy0, 1.0f, 0xffffffff, 0, 0, 1.0f, 1);
+		smoltdfx_vtx(fx1, fy0, 1.0f, 0xffffffff, 0, 0, 0.0002f, 0);
+		smoltdfx_vtx(fx1, fy1, 1.0f, 0xffffffff, 0, 0, 0.0002f, 0);
+
+		smoltdfx_vtx(fx0, fy0, 1.0f, 0xffffffff, 0, 0, 1.0f, 1);
+		smoltdfx_vtx(fx1, fy1, 1.0f, 0xffffffff, 0, 0, 0.0002f, 0);
+		smoltdfx_vtx(fx0, fy1, 1.0f, 0xffffffff, 0, 0, 1.0f, 0);
+		break;
+	case 15:	/* dual-TMU: checker (TMU0) modulated by a light map on the
+			 * downstream TMU1 (TMU0 PASS feeds TMU1's modulate) */
+		smoltdfx_tex(TX_CHECK, TDFX_TFMT_RGB565, 0, SMOLTDFX_TC_PASS, TEXCP);
+		smoltdfx_tex1(TX_LIGHT, TDFX_TFMT_RGB565, 0, SMOLTDFX_TC_MODULATE);
 		smoltdfx_setupmode(SM_TEX);
 		smoltdfx_quad(fx0, fy0, fx1, fy1, -1, -1, -1, -1, 256, 256);
 		break;

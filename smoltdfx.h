@@ -247,13 +247,71 @@ static inline void smoltdfx_palette(int idx, unsigned int rgb)
 		    0x80000000u | ((idx & 0xfe) << 23) | (rgb & 0xffffff));
 }
 
+/* textureMode combine preset: Ctmu = this TMU's texel * the "other" colour */
+#define SMOLTDFX_TC_MODULATE	((1u << 14) | (1u << 17) | (1u << 23) | (1u << 26))
+
+/* enable TMU1 - its colour becomes the "other" input to TMU0's combine */
+static inline void smoltdfx_tex1(unsigned int base, int fmt, unsigned int filter,
+				 unsigned int combine)
+{
+	smoltdfx_w3(TDFX_3D_TMU1 + TDFX_3D_TEXBASEADDR, base);
+	smoltdfx_w3(TDFX_3D_TMU1 + TDFX_3D_TLOD, 0);
+	smoltdfx_w3(TDFX_3D_TMU1 + TDFX_3D_TEXTUREMODE,
+		    (fmt << TDFX_TEX_TFORMAT_SHIFT) | filter | combine);
+}
+
+static inline void smoltdfx_tex1_off(void)
+{
+	smoltdfx_w3(TDFX_3D_TMU1 + TDFX_3D_TEXTUREMODE, 0);
+}
+
+/* ------------------------- alpha / fog ------------------------------- */
+static inline void smoltdfx_blend(int srcf, int dstf)
+{
+	smoltdfx_w3(TDFX_3D_ALPHAMODE, TDFX_ALPHA_ENBLEND |
+		    (srcf << TDFX_ALPHA_SRCFUNC_SHIFT) |
+		    (dstf << TDFX_ALPHA_DSTFUNC_SHIFT));
+}
+
+static inline void smoltdfx_alpha_test(int func, int ref)
+{
+	smoltdfx_w3(TDFX_3D_ALPHAMODE, TDFX_ALPHA_ENTEST |
+		    ((func & 7) << TDFX_ALPHA_FUNC_SHIFT) |
+		    ((ref & 0xff) << TDFX_ALPHA_REF_SHIFT));
+}
+
+static inline void smoltdfx_alpha_off(void)
+{
+	smoltdfx_w3(TDFX_3D_ALPHAMODE, 0);
+}
+
+/* table fog indexed by eye-W: fill all 64 entries with a linear 0->255 ramp */
+static inline void smoltdfx_fog_table(unsigned int color)
+{
+	int i;
+
+	smoltdfx_w3(TDFX_3D_FOGCOLOR, color & 0xffffff);
+	for (i = 0; i < 32; i++) {
+		unsigned int lo = (i * 2) * 255 / 63;
+		unsigned int hi = (i * 2 + 1) * 255 / 63;
+
+		smoltdfx_w3(TDFX_3D_FOGTABLE + i * 4, (lo << 8) | (hi << 24));
+	}
+	smoltdfx_w3(TDFX_3D_FOGMODE, TDFX_FOG_ENABLE);
+}
+
+static inline void smoltdfx_fog_off(void)
+{
+	smoltdfx_w3(TDFX_3D_FOGMODE, 0);
+}
+
 /* --------------------------- geometry -------------------------------- */
 static inline void smoltdfx_setupmode(unsigned int mode)
 {
 	smoltdfx_w3(TDFX_3D_SSETUPMODE, mode);
 }
 
-/* one setup-unit vertex (texcoords are ignored until texturing is on) */
+/* one setup-unit vertex; the texcoords are shared by TMU0 and TMU1 */
 static inline void smoltdfx_vtx(float x, float y, float z, unsigned int argb,
 				float s, float t, float w, int first)
 {
@@ -264,6 +322,8 @@ static inline void smoltdfx_vtx(float x, float y, float z, unsigned int argb,
 	smoltdfx_w3(TDFX_3D_SARGB, argb);
 	smoltdfx_wf(TDFX_3D_SSOW0, s);
 	smoltdfx_wf(TDFX_3D_STOW0, t);
+	smoltdfx_wf(TDFX_3D_SSOW1, s);
+	smoltdfx_wf(TDFX_3D_STOW1, t);
 	smoltdfx_w3(first ? TDFX_3D_SBEGINTRICMD : TDFX_3D_SDRAWTRICMD, 1);
 }
 
