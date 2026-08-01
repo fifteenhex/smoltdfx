@@ -127,6 +127,7 @@ static void scene_cubes(float t)
 #define TX_NCC		TEX(5)		/* 8bpp NCC indices */
 #define TX_BILIN	TEX(6)
 #define TX_LIGHT	TEX(7)		/* radial light map (multitexture) */
+#define TX_SPRITE	TEX(8)		/* cyan diamond on magenta (chroma) */
 
 static volatile unsigned short *tx16(unsigned int off)
 {
@@ -239,13 +240,28 @@ static void gen_textures(void)
 			tx16(TX_LIGHT)[v * TEXW + u] = smoltdfx_rgb565(l, l, l);
 		}
 	}
+
+	/* sprite: magenta field (the chroma key) with a cyan diamond */
+	for (v = 0; v < TEXW; v++) {
+		for (u = 0; u < TEXW; u++) {
+			int dx = u - 128, dy = v - 128;
+
+			if (dx < 0)
+				dx = -dx;
+			if (dy < 0)
+				dy = -dy;
+			tx16(TX_SPRITE)[v * TEXW + u] =
+				(dx + dy < 96) ? smoltdfx_rgb565(0, 220, 255)
+					       : smoltdfx_rgb565(255, 0, 255);
+		}
+	}
 }
 
 /* ============================ scene: grid =========================== */
 #define GX		5
 #define GY		4
 #define INSET		3
-#define NTILE		16		/* tiles drawn this revision (13,14 still blank) */
+#define NTILE		18		/* tiles drawn this revision (18,19 blank) */
 
 static void tile_rect(int idx, int *x0, int *y0, int *x1, int *y1)
 {
@@ -377,13 +393,41 @@ static void draw_tile(int idx, float t)
 		smoltdfx_vtx(fx1, fy1, 1.0f, 0xffffffff, 0, 0, 0.0002f, 0);
 		smoltdfx_vtx(fx0, fy1, 1.0f, 0xffffffff, 0, 0, 1.0f, 0);
 		break;
-	case 15:	/* dual-TMU: checker (TMU0) modulated by a light map on the
-			 * downstream TMU1 (TMU0 PASS feeds TMU1's modulate) */
+	case 13:	/* ordered dither: smooth dark gradient */
+		smoltdfx_dither(1, 0);
+		smoltdfx_setupmode(SM_BASE);
+		smoltdfx_quad(fx0, fy0, fx1, fy1, 0xff000000, 0xff000000,
+			      0xff283040, 0xff283040, 0, 0);
+		break;
+	case 14:	/* chroma-key: magenta punched out of a sprite */
+		smoltdfx_chroma(1, 0xff00ff);
+		smoltdfx_tex(TX_SPRITE, TDFX_TFMT_RGB565, 0, SMOLTDFX_TC_PASS, TEXCP);
+		smoltdfx_setupmode(SM_TEX);
+		smoltdfx_quad(fx0, fy0, fx1, fy1, -1, -1, -1, -1, 256, 256);
+		break;
+	case 15:	/* dual-TMU: checker (TMU0) x light map on downstream TMU1 */
 		smoltdfx_tex(TX_CHECK, TDFX_TFMT_RGB565, 0, SMOLTDFX_TC_PASS, TEXCP);
 		smoltdfx_tex1(TX_LIGHT, TDFX_TFMT_RGB565, 0, SMOLTDFX_TC_MODULATE);
 		smoltdfx_setupmode(SM_TEX);
 		smoltdfx_quad(fx0, fy0, fx1, fy1, -1, -1, -1, -1, 256, 256);
 		break;
+	case 16:	/* stipple: 8x4 pattern (checker) punches holes in a fill */
+		smoltdfx_stipple(1, 0xaa55aa55u);
+		smoltdfx_setupmode(SM_BASE);
+		smoltdfx_quad(fx0, fy0, fx1, fy1, 0xff40ff40, 0xff40ff40,
+			      0xff40ff40, 0xff40ff40, 0, 0);
+		break;
+	case 17: {	/* Y-origin: draw in flipped screen space (appears inverted) */
+		int fh = smoltdfx_H;
+		float dy0 = (fh - 1) - fy1, dy1 = (fh - 1) - fy0;
+
+		smoltdfx_clip(x0, (fh - 1) - y1, x1, (fh - 1) - y0);
+		smoltdfx_yorigin(1);
+		smoltdfx_setupmode(SM_BASE);
+		smoltdfx_quad(fx0, dy0, fx1, dy1, 0xffffffff, 0xff000000,
+			      0xffffffff, 0xff000000, 0, 0);
+		break;
+	}
 	}
 }
 
