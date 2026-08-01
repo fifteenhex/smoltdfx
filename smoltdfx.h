@@ -408,6 +408,47 @@ static inline void smoltdfx_quad(float x0, float y0, float x1, float y1,
 	smoltdfx_vtx(x0, y1, 1.0f, cBL, 0,  t1, 1.0f, 0);	/* BL */
 }
 
+/*
+ * A point as a size x size quad centred on (x,y).  The Voodoo3 has no
+ * native point primitive, so it is drawn as a quad.  The caller sets the
+ * setup mode (SM_BASE for a flat point).
+ */
+static inline void smoltdfx_point(float x, float y, float size,
+				  unsigned int argb)
+{
+	float h = size * 0.5f;
+
+	smoltdfx_quad(x - h, y - h, x + h, y + h, argb, argb, argb, argb, 0, 0);
+}
+
+/*
+ * A line of the given width as a rectangle (two triangles) built from the
+ * segment thickened along its perpendicular, since the setup unit only
+ * draws triangles.  The caller sets the setup mode.
+ */
+static inline void smoltdfx_line(float x0, float y0, float x1, float y1,
+				 float width, unsigned int argb)
+{
+	float dx = x1 - x0, dy = y1 - y0;
+	float len = smoltdfx_sqrt(dx * dx + dy * dy);
+	float nx, ny;
+
+	if (len < 0.001f) {
+		smoltdfx_point(x0, y0, width, argb);
+		return;
+	}
+	nx = -dy / len * width * 0.5f;
+	ny =  dx / len * width * 0.5f;
+
+	smoltdfx_vtx(x0 + nx, y0 + ny, 1.0f, argb, 0, 0, 1.0f, 1);
+	smoltdfx_vtx(x1 + nx, y1 + ny, 1.0f, argb, 0, 0, 1.0f, 0);
+	smoltdfx_vtx(x1 - nx, y1 - ny, 1.0f, argb, 0, 0, 1.0f, 0);
+
+	smoltdfx_vtx(x0 + nx, y0 + ny, 1.0f, argb, 0, 0, 1.0f, 1);
+	smoltdfx_vtx(x1 - nx, y1 - ny, 1.0f, argb, 0, 0, 1.0f, 0);
+	smoltdfx_vtx(x0 - nx, y0 - ny, 1.0f, argb, 0, 0, 1.0f, 0);
+}
+
 /* =============================== 2D engine =========================== */
 static inline void smoltdfx_wait_idle(void);		/* defined below */
 
