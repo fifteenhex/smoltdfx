@@ -14,9 +14,9 @@ from the hardware registers — no X, no Mesa/Glide.
 
 The demo has selectable scenes:
 
-| `basic` | `cubes` |
-|:---:|:---:|
-| ![basic scene](doc/basic.png) | ![cubes scene](doc/cubes.png) |
+| `basic` | `cubes` | `grid` |
+|:---:|:---:|:---:|
+| ![basic scene](doc/basic.png) | ![cubes scene](doc/cubes.png) | ![grid scene](doc/grid.png) |
 
 ## Layout
 
@@ -48,7 +48,7 @@ Needs a Linux source tree with the `/dev/tdfx3d` support for its in-tree
 
 ## Run
 
-    ./tdfx3d_demo [/dev/tdfx3d] [/dev/fb0] [basic|cubes]
+    ./tdfx3d_demo [/dev/tdfx3d] [/dev/fb0] [basic|cubes|grid]
 
 Boot the card in a 16bpp mode first, e.g.
 `tdfxfb.mode_option=640x480-16@60`.

@@ -209,6 +209,44 @@ static inline void smoltdfx_clip_full(void)
 	smoltdfx_fbz_bit(TDFX_FBZ_ENCLIP, 0);
 }
 
+/* --------------------------- texturing ------------------------------- */
+/* textureMode combine preset: Ctmu = the fetched texel (replace) */
+#define SMOLTDFX_TC_PASS	((1u << 12) | (1u << 18) | (1u << 21) | (1u << 27))
+
+static inline void smoltdfx_colorpath(unsigned int v)
+{
+	smoltdfx_w3(TDFX_3D_FBZCOLORPATH, v);
+}
+
+/*
+ * Enable TMU0 texturing.  base = VRAM byte offset of a 256x256 texture,
+ * fmt = TDFX_TFMT_*, filter = 0 (point) or TDFX_TEX_MAGFILTER/MINFILTER,
+ * combine = a textureMode combine preset (e.g. SMOLTDFX_TC_PASS), cpath
+ * the fbzColorPath value (usually TDFX_CP_RGB_TEXTURE | TDFX_CP_TEXTURE_EN).
+ */
+static inline void smoltdfx_tex(unsigned int base, int fmt, unsigned int filter,
+				unsigned int combine, unsigned int cpath)
+{
+	smoltdfx_w3(TDFX_3D_TEXBASEADDR, base);
+	smoltdfx_w3(TDFX_3D_TLOD, 0);			/* 256x256, LOD 0 */
+	smoltdfx_w3(TDFX_3D_TEXTUREMODE,
+		    (fmt << TDFX_TEX_TFORMAT_SHIFT) | filter | combine);
+	smoltdfx_w3(TDFX_3D_FBZCOLORPATH, cpath);
+}
+
+static inline void smoltdfx_tex_off(void)
+{
+	smoltdfx_w3(TDFX_3D_TEXTUREMODE, 0);
+	smoltdfx_w3(TDFX_3D_FBZCOLORPATH, TDFX_CP_RGB_ITERATED);
+}
+
+/* download one 0xRRGGBB CLUT entry (P8/AP88), broadcast to both TMUs */
+static inline void smoltdfx_palette(int idx, unsigned int rgb)
+{
+	smoltdfx_w3(TDFX_3D_NCCTABLE0 + 16 + (idx & 7) * 4,
+		    0x80000000u | ((idx & 0xfe) << 23) | (rgb & 0xffffff));
+}
+
 /* --------------------------- geometry -------------------------------- */
 static inline void smoltdfx_setupmode(unsigned int mode)
 {

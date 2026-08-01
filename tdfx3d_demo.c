@@ -5,6 +5,9 @@
  * It offers selectable scenes (pick one on the command line):
  *   basic  - a full-screen Gouraud background with a bouncing quad
  *   cubes  - several depth-buffered Gouraud cubes orbiting the screen
+ *   grid   - a grid of tiles, each exercising one feature: flat, Gouraud,
+ *            depth cube, point/bilinear textures, the ARGB4444/1555/RGB332
+ *            formats, an 8bpp palette and an NCC/YIQ table
  *
  * At start-up it renders one canonical frame (a fixed animation phase) of
  * the selected scene and prints a digest of it to the serial console,
@@ -12,7 +15,7 @@
  * grid) lets a QEMU run and a real-hardware run be compared, and the
  * selectable scenes make per-feature regression testing possible.
  *
- * Usage: tdfx3d_demo [/dev/tdfx3d] [/dev/fb0] [basic|cubes] [dump]
+ * Usage: tdfx3d_demo [/dev/tdfx3d] [/dev/fb0] [basic|cubes|grid] [dump]
  *
  * Freestanding (nolibc); build with the Makefile here.  Boot the card
  * with e.g. tdfxfb.mode_option=640x480-16@60 (RGB565, fb at VRAM 0).
@@ -20,9 +23,11 @@
 #include "smoltdfx.h"
 
 #define SM_BASE		(TDFX_SSETUP_RGB | TDFX_SSETUP_Z | TDFX_SSETUP_WFBI)
+#define SM_TEX		(SM_BASE | TDFX_SSETUP_ST0)
+#define TEXCP		(TDFX_CP_RGB_TEXTURE | TDFX_CP_TEXTURE_EN)
 #define CANON_T		1.234f		/* canonical animation phase */
 
-enum { SC_BASIC, SC_CUBES };
+enum { SC_BASIC, SC_CUBES, SC_GRID };
 
 /* ============================ scene: basic ========================== */
 static void scene_basic(float t)
@@ -45,7 +50,7 @@ static void scene_basic(float t)
 		      0xffffffff, 0xffffffff, 0, 0);
 }
 
-/* ============================ scene: cubes ========================== */
+/* ============================== cube ================================ */
 /* unit-cube corners and the 12 triangles of its 6 faces */
 static const signed char cvx[8] = { -1, 1, -1, 1, -1, 1, -1, 1 };
 static const signed char cvy[8] = { -1, -1, 1, 1, -1, -1, 1, 1 };
@@ -90,6 +95,7 @@ static void draw_cube(float cx, float cy, float rad, float ang)
 	}
 }
 
+/* ============================ scene: cubes ========================== */
 static void scene_cubes(float t)
 {
 	float W = smoltdfx_W, H = smoltdfx_H, rad = H * 0.22f;
@@ -109,13 +115,234 @@ static void scene_cubes(float t)
 	}
 }
 
+/* ============================= textures ============================= */
+#define TEXW		256
+#define TEX(k)		(0x300000u + (k) * 0x20000u)
+#define TX_CHECK	TEX(0)		/* red/yellow checker (565) */
+#define TX_4444		TEX(1)
+#define TX_1555		TEX(2)
+#define TX_332		TEX(3)		/* 8bpp */
+#define TX_PAL		TEX(4)		/* 8bpp palette indices */
+#define TX_NCC		TEX(5)		/* 8bpp NCC indices */
+#define TX_BILIN	TEX(6)
+
+static volatile unsigned short *tx16(unsigned int off)
+{
+	return smoltdfx_vram + off / 2;
+}
+
+static volatile unsigned char *tx8(unsigned int off)
+{
+	return (volatile unsigned char *)smoltdfx_vram + off;
+}
+
+static unsigned int pack4444(unsigned int a, unsigned int r, unsigned int g,
+			     unsigned int b)
+{
+	return ((a >> 4) << 12) | ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
+}
+
+static unsigned int pack1555(unsigned int a, unsigned int r, unsigned int g,
+			     unsigned int b)
+{
+	return (a ? 0x8000u : 0) | ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3);
+}
+
+static unsigned int pack332(unsigned int r, unsigned int g, unsigned int b)
+{
+	return ((r >> 5) << 5) | ((g >> 5) << 2) | (b >> 6);
+}
+
+static void gen_textures(void)
+{
+	int u, v, i;
+	volatile unsigned short *p;
+
+	for (v = 0; v < TEXW; v++) {
+		for (u = 0; u < TEXW; u++) {
+			int cell = ((u >> 5) ^ (v >> 5)) & 1;
+			int j = v * TEXW + u;
+
+			tx16(TX_CHECK)[j] = cell ? smoltdfx_rgb565(255, 40, 40)
+						 : smoltdfx_rgb565(255, 240, 40);
+			tx16(TX_4444)[j] = cell ? pack4444(255, 40, 255, 255)
+						: pack4444(255, 255, 40, 255);
+			tx16(TX_1555)[j] = cell ? pack1555(1, 40, 255, 40)
+						: pack1555(1, 40, 40, 255);
+			tx8(TX_332)[j] = cell ? pack332(255, 128, 0)
+					      : pack332(0, 128, 255);
+			tx8(TX_PAL)[j] = (u ^ v) & 0xff;
+			tx8(TX_NCC)[j] = ((v >> 4) << 4) |
+					 (((u >> 6) & 3) << 2) | ((u >> 4) & 3);
+		}
+	}
+
+	/* palette: a smooth HSV-ish rainbow */
+	for (i = 0; i < 256; i++) {
+		int r, g, bl, seg = i * 6 / 256, f = (i * 6) % 256;
+
+		switch (seg) {
+		case 0:
+			r = 255; g = f; bl = 0;
+			break;
+		case 1:
+			r = 255 - f; g = 255; bl = 0;
+			break;
+		case 2:
+			r = 0; g = 255; bl = f;
+			break;
+		case 3:
+			r = 0; g = 255 - f; bl = 255;
+			break;
+		case 4:
+			r = f; g = 0; bl = 255;
+			break;
+		default:
+			r = 255; g = 0; bl = 255 - f;
+			break;
+		}
+		smoltdfx_palette(i, (r << 16) | (g << 8) | bl);
+	}
+
+	/* NCC table: Y ramp + red (I) and blue (Q) chroma steps */
+	for (i = 0; i < 4; i++) {
+		unsigned int y0 = (i * 4 + 0) * 17, y1 = (i * 4 + 1) * 17;
+		unsigned int y2 = (i * 4 + 2) * 17, y3 = (i * 4 + 3) * 17;
+
+		smoltdfx_w3(TDFX_3D_NCCTABLE0 + i * 4,
+			    y0 | (y1 << 8) | (y2 << 16) | (y3 << 24));
+	}
+	for (i = 0; i < 4; i++) {
+		smoltdfx_w3(TDFX_3D_NCCTABLE0 + 16 + i * 4, (i * 60) << 18);
+		smoltdfx_w3(TDFX_3D_NCCTABLE0 + 32 + i * 4, i * 60);
+	}
+
+	/* bilinear probe: 4 distinct corner texels, rest flat grey */
+	p = tx16(TX_BILIN);
+	for (i = 0; i < TEXW * TEXW; i++)
+		p[i] = smoltdfx_rgb565(60, 60, 60);
+	p[0] = smoltdfx_rgb565(255, 0, 0);
+	p[1] = smoltdfx_rgb565(0, 255, 0);
+	p[TEXW] = smoltdfx_rgb565(0, 0, 255);
+	p[TEXW + 1] = smoltdfx_rgb565(255, 255, 255);
+}
+
+/* ============================ scene: grid =========================== */
+#define GX		5
+#define GY		4
+#define INSET		3
+#define NTILE		10		/* tiles implemented this revision */
+
+static void tile_rect(int idx, int *x0, int *y0, int *x1, int *y1)
+{
+	int cw = smoltdfx_W / GX, ch = smoltdfx_H / GY;
+	int col = idx % GX, row = idx / GX;
+
+	*x0 = col * cw + INSET;
+	*y0 = row * ch + INSET;
+	*x1 = (col + 1) * cw - INSET;
+	*y1 = (row + 1) * ch - INSET;
+}
+
+/* reset to a clean per-tile state, clipped to the tile */
+static void tile_begin(int x0, int y0, int x1, int y1)
+{
+	smoltdfx_tex_off();
+	smoltdfx_fbz = TDFX_FBZ_RGBWRMASK | (TDFX_ZF_GT << TDFX_FBZ_ZFUNC_SHIFT);
+	smoltdfx_zfunc(7);			/* ALWAYS */
+	smoltdfx_clip(x0, y0, x1, y1);		/* also enables ENCLIP */
+}
+
+static void draw_tile(int idx, float t)
+{
+	int x0, y0, x1, y1;
+	float fx0, fy0, fx1, fy1, cx, cy;
+
+	tile_rect(idx, &x0, &y0, &x1, &y1);
+	tile_begin(x0, y0, x1, y1);
+	fx0 = x0; fy0 = y0; fx1 = x1; fy1 = y1;
+	cx = (fx0 + fx1) * 0.5f;
+	cy = (fy0 + fy1) * 0.5f;
+
+	switch (idx) {
+	case 0:	/* flat fill through the clip rect */
+		smoltdfx_setupmode(SM_BASE);
+		smoltdfx_quad(fx0, fy0, fx1, fy1, 0xff2060c0, 0xff2060c0,
+			      0xff2060c0, 0xff2060c0, 0, 0);
+		break;
+	case 1:	/* Gouraud quad */
+		smoltdfx_setupmode(SM_BASE);
+		smoltdfx_quad(fx0, fy0, fx1, fy1, 0xffff0000, 0xff00ff00,
+			      0xff0000ff, 0xffffff00, 0, 0);
+		break;
+	case 2:	/* depth-buffered spinning cube */
+		smoltdfx_depth(1, TDFX_ZF_LT);
+		draw_cube(cx, cy, (fx1 - fx0) * 0.55f, t);
+		break;
+	case 3:	/* point-sampled RGB565 checker */
+		smoltdfx_tex(TX_CHECK, TDFX_TFMT_RGB565, 0, SMOLTDFX_TC_PASS, TEXCP);
+		smoltdfx_setupmode(SM_TEX);
+		smoltdfx_quad(fx0, fy0, fx1, fy1, -1, -1, -1, -1, 256, 256);
+		break;
+	case 4:	/* bilinear magnification (2x2 texels blended) */
+		smoltdfx_tex(TX_BILIN, TDFX_TFMT_RGB565, TDFX_TEX_MAGFILTER,
+			     SMOLTDFX_TC_PASS, TEXCP);
+		smoltdfx_setupmode(SM_TEX);
+		smoltdfx_quad(fx0, fy0, fx1, fy1, -1, -1, -1, -1, 1, 1);
+		break;
+	case 5:	/* ARGB4444 */
+		smoltdfx_tex(TX_4444, TDFX_TFMT_ARGB4444, 0, SMOLTDFX_TC_PASS, TEXCP);
+		smoltdfx_setupmode(SM_TEX);
+		smoltdfx_quad(fx0, fy0, fx1, fy1, -1, -1, -1, -1, 256, 256);
+		break;
+	case 6:	/* ARGB1555 */
+		smoltdfx_tex(TX_1555, TDFX_TFMT_ARGB1555, 0, SMOLTDFX_TC_PASS, TEXCP);
+		smoltdfx_setupmode(SM_TEX);
+		smoltdfx_quad(fx0, fy0, fx1, fy1, -1, -1, -1, -1, 256, 256);
+		break;
+	case 7:	/* RGB332 (8bpp) */
+		smoltdfx_tex(TX_332, TDFX_TFMT_RGB332, 0, SMOLTDFX_TC_PASS, TEXCP);
+		smoltdfx_setupmode(SM_TEX);
+		smoltdfx_quad(fx0, fy0, fx1, fy1, -1, -1, -1, -1, 256, 256);
+		break;
+	case 8:	/* P8 palette (rainbow CLUT) */
+		smoltdfx_tex(TX_PAL, TDFX_TFMT_P8, 0, SMOLTDFX_TC_PASS, TEXCP);
+		smoltdfx_setupmode(SM_TEX);
+		smoltdfx_quad(fx0, fy0, fx1, fy1, -1, -1, -1, -1, 256, 256);
+		break;
+	case 9:	/* NCC (YIQ) */
+		smoltdfx_tex(TX_NCC, TDFX_TFMT_YIQ, 0, SMOLTDFX_TC_PASS, TEXCP);
+		smoltdfx_setupmode(SM_TEX);
+		smoltdfx_quad(fx0, fy0, fx1, fy1, -1, -1, -1, -1, 256, 256);
+		break;
+	}
+}
+
+static void scene_grid(float t)
+{
+	int i;
+
+	smoltdfx_target();
+	smoltdfx_clip_full();
+	/* clear colour AND depth (enable depth writes for the fast-fill) */
+	smoltdfx_fbz = TDFX_FBZ_RGBWRMASK | TDFX_FBZ_ENDEPTH |
+		       TDFX_FBZ_DEPTHWRMASK | (TDFX_ZF_GT << TDFX_FBZ_ZFUNC_SHIFT);
+	smoltdfx_w3(TDFX_3D_FBZMODE, smoltdfx_fbz);
+	smoltdfx_clear(0xff000000, 0xffff);
+
+	for (i = 0; i < NTILE; i++)
+		draw_tile(i, t);
+}
+
 /* ------------------------------ driver ------------------------------- */
 static void draw_scene(int scene, float t)
 {
-	if (scene == SC_CUBES)
+	if (scene == SC_BASIC)
+		scene_basic(t);
+	else if (scene == SC_CUBES)
 		scene_cubes(t);
 	else
-		scene_basic(t);
+		scene_grid(t);
 }
 
 static int streq(const char *a, const char *b)
@@ -130,8 +357,8 @@ static int streq(const char *a, const char *b)
 int main(int argc, char **argv)
 {
 	const char *rdev = "/dev/tdfx3d", *fdev = "/dev/fb0";
-	const char *tag = "cubes";
-	int scene = SC_CUBES, do_ppm = 0, npos = 0, i;
+	const char *tag = "grid";
+	int scene = SC_GRID, do_ppm = 0, npos = 0, i;
 	float t;
 
 	for (i = 1; i < argc; i++) {
@@ -141,6 +368,9 @@ int main(int argc, char **argv)
 		} else if (streq(argv[i], "cubes")) {
 			scene = SC_CUBES;
 			tag = "cubes";
+		} else if (streq(argv[i], "grid")) {
+			scene = SC_GRID;
+			tag = "grid";
 		} else if (streq(argv[i], "dump")) {
 			do_ppm = 1;
 		} else if (npos++ == 0) {
@@ -159,6 +389,8 @@ int main(int argc, char **argv)
 		for (;;)
 			usleep(1000000);
 	}
+	if (scene == SC_GRID)
+		gen_textures();
 
 	/* canonical frame + digest for QEMU-vs-hardware comparison */
 	draw_scene(scene, CANON_T);
