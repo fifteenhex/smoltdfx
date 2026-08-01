@@ -300,6 +300,16 @@ static inline void smoltdfx_fog_table(unsigned int color)
 	smoltdfx_w3(TDFX_3D_FOGMODE, TDFX_FOG_ENABLE);
 }
 
+/*
+ * Enable fog with an explicit fogMode: the factor comes from iterated alpha
+ * (TDFX_FOG_ALPHA) or Z (TDFX_FOG_Z), or fogColor is added as a constant
+ * (TDFX_FOG_CONSTANT).  No fog table is needed for these modes.
+ */
+static inline void smoltdfx_fog(unsigned int color, unsigned int mode)
+{
+	smoltdfx_w3(TDFX_3D_FOGCOLOR, color & 0xffffff);
+	smoltdfx_w3(TDFX_3D_FOGMODE, TDFX_FOG_ENABLE | mode);
+}
 static inline void smoltdfx_fog_off(void)
 {
 	smoltdfx_w3(TDFX_3D_FOGMODE, 0);
