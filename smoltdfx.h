@@ -387,6 +387,49 @@ static inline void smoltdfx_quad(float x0, float y0, float x1, float y1,
 	smoltdfx_vtx(x0, y1, 1.0f, cBL, 0,  t1, 1.0f, 0);	/* BL */
 }
 
+/* =============================== 2D engine =========================== */
+static inline void smoltdfx_wait_idle(void);		/* defined below */
+
+static inline void smoltdfx_w2(unsigned int off, unsigned int v)
+{
+	*(volatile unsigned int *)(smoltdfx_regs + TDFX_2D_BASE + off) = v;
+}
+
+/*
+ * Host-to-screen colour blit: stream a w x h block of RGB565 pixels from
+ * host memory into the current render target at (dx,dy).  Source pixels
+ * are packed two per 32-bit launch word with each row padded to a 32-bit
+ * boundary, which is how the blitter consumes a 16bpp colour source.
+ */
+static inline void smoltdfx_blt_rgb565(int dx, int dy, int w, int h,
+				       const unsigned short *src)
+{
+	unsigned int dst = smoltdfx_cur ? smoltdfx_back : smoltdfx_front;
+	int x, y;
+
+	smoltdfx_wait_idle();
+	smoltdfx_w2(TDFX_2D_CLIP0MIN, 0);
+	smoltdfx_w2(TDFX_2D_CLIP0MAX, (smoltdfx_H << 16) | smoltdfx_W);
+	smoltdfx_w2(TDFX_2D_DSTBASE, dst);
+	smoltdfx_w2(TDFX_2D_DSTFORMAT, (3u << 16) | smoltdfx_stride);
+	smoltdfx_w2(TDFX_2D_SRCFORMAT, 3u << 16);
+	smoltdfx_w2(TDFX_2D_DSTSIZE, (h << 16) | w);
+	smoltdfx_w2(TDFX_2D_DSTXY, (dy << 16) | dx);
+	smoltdfx_w2(TDFX_2D_COMMAND, TDFX_2D_OP_H2S_BLT | (1u << 8) |
+		    (TDFX_2D_ROP_SRCCOPY << 24));
+
+	for (y = 0; y < h; y++) {
+		for (x = 0; x < w; x += 2) {
+			unsigned int word = src[y * w + x];
+
+			if (x + 1 < w)
+				word |= (unsigned int)src[y * w + x + 1] << 16;
+			smoltdfx_w2(TDFX_2D_LAUNCH, word);
+		}
+	}
+	smoltdfx_wait_idle();
+}
+
 /* ============================ diagnostics ============================ *
  * A self-describing dump of the rendered frame so a QEMU run and a real
  * hardware run can be compared without transferring images: a whole-frame
