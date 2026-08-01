@@ -8,6 +8,7 @@
  *   - smoltdfx_clear()    fast-fill the framebuffer
  *   - smoltdfx_present()  swap-buffer at vblank
  *   - smoltdfx_vtx()/quad() feed the setup unit (Gouraud triangles)
+ *   - smoltdfx_digest()   dump a comparable summary of the rendered frame
  *
  * Register offsets and bitfields all come from <linux/tdfx3d.h>.
  *
@@ -18,6 +19,7 @@
 
 #include <linux/tdfx3d.h>
 #include <linux/fb.h>
+#include <stdarg.h>
 
 /* =============================== state =============================== */
 static volatile unsigned char *smoltdfx_regs;	/* BAR0 register aperture */
@@ -234,6 +236,105 @@ static inline void smoltdfx_quad(float x0, float y0, float x1, float y1,
 	smoltdfx_vtx(x0, y0, 1.0f, cTL, 0,  0,  1.0f, 1);	/* TL */
 	smoltdfx_vtx(x1, y1, 1.0f, cBR, s1, t1, 1.0f, 0);	/* BR */
 	smoltdfx_vtx(x0, y1, 1.0f, cBL, 0,  t1, 1.0f, 0);	/* BL */
+}
+
+/* ============================ diagnostics ============================ *
+ * A self-describing dump of the rendered frame so a QEMU run and a real
+ * hardware run can be compared without transferring images: a whole-frame
+ * checksum plus a fixed 8x6 grid of sampled RGB565 pixels, printed to
+ * stdout (the serial console under the test initramfs).  The sample grid
+ * is content-independent.  smoltdfx_dump_ppm() also writes the frame out.
+ */
+static inline void smoltdfx_wait_idle(void)
+{
+	int i;
+
+	for (i = 0; i < 2000000; i++)
+		if (!(*(volatile unsigned int *)(smoltdfx_regs + TDFX_3D_BASE +
+					     TDFX_3D_STATUS) & TDFX_STATUS_BUSY))
+			break;
+}
+
+/* read one pixel back from the buffer at byte offset `off` */
+static inline unsigned int smoltdfx_peek(unsigned int off, int x, int y)
+{
+	return smoltdfx_vram[off / 2 + (unsigned int)y * smoltdfx_W + (unsigned int)x];
+}
+
+/* FNV-1a hash over the whole visible buffer */
+static inline unsigned int smoltdfx_checksum(unsigned int off)
+{
+	unsigned int h = 2166136261u, n = smoltdfx_W * smoltdfx_H, i;
+	volatile unsigned short *p = smoltdfx_vram + off / 2;
+
+	for (i = 0; i < n; i++) {
+		h ^= p[i];
+		h *= 16777619u;
+	}
+	return h;
+}
+
+static inline void smoltdfx__emit(const char *fmt, ...)
+{
+	char b[256];
+	va_list ap;
+	int n;
+
+	va_start(ap, fmt);
+	n = vsnprintf(b, sizeof(b), fmt, ap);
+	va_end(ap);
+	if (n > 0)
+		write(1, b, n > (int)sizeof(b) ? (int)sizeof(b) : n);
+}
+
+/* print a comparable digest of the buffer at byte offset `off` */
+static inline void smoltdfx_digest(const char *tag, unsigned int off, int milli)
+{
+	int r, c;
+
+	smoltdfx_wait_idle();
+	smoltdfx__emit("== smoltdfx digest: %s ==\n", tag);
+	smoltdfx__emit("mode %ux%u t=%d.%03d sum 0x%08x\n", smoltdfx_W,
+		       smoltdfx_H, milli / 1000, milli % 1000,
+		       smoltdfx_checksum(off));
+	for (r = 0; r < 6; r++) {
+		int y = (2 * r + 1) * (int)smoltdfx_H / 12;
+
+		smoltdfx__emit("r%d:", r);
+		for (c = 0; c < 8; c++) {
+			int x = (2 * c + 1) * (int)smoltdfx_W / 16;
+
+			smoltdfx__emit(" %04x", smoltdfx_peek(off, x, y));
+		}
+		smoltdfx__emit("\n");
+	}
+	smoltdfx__emit("== end ==\n");
+}
+
+/* write the buffer at byte offset `off` as a binary PPM (P6) */
+static inline void smoltdfx_dump_ppm(const char *path, unsigned int off)
+{
+	static unsigned char row[2048 * 3];
+	char hdr[64];
+	int fd, x, y, n;
+
+	smoltdfx_wait_idle();
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	if (fd < 0)
+		return;
+	n = snprintf(hdr, sizeof(hdr), "P6\n%u %u\n255\n", smoltdfx_W, smoltdfx_H);
+	write(fd, hdr, n);
+	for (y = 0; y < (int)smoltdfx_H; y++) {
+		for (x = 0; x < (int)smoltdfx_W; x++) {
+			unsigned int p = smoltdfx_peek(off, x, y);
+
+			row[x * 3 + 0] = ((p >> 11) & 0x1f) * 255 / 31;
+			row[x * 3 + 1] = ((p >> 5) & 0x3f) * 255 / 63;
+			row[x * 3 + 2] = (p & 0x1f) * 255 / 31;
+		}
+		write(fd, row, smoltdfx_W * 3);
+	}
+	close(fd);
 }
 
 #endif /* SMOLTDFX_H */
