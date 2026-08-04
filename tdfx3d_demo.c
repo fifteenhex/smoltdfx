@@ -23,7 +23,7 @@
  * grid) lets a QEMU run and a real-hardware run be compared, and the
  * selectable scenes make per-feature regression testing possible.
  *
-  * Usage: tdfx3d_demo [/dev/tdfx3d] [/dev/fb0] [<scene>] [cmdfifo] [dump]
+  * Usage: tdfx3d_demo [/dev/tdfx3d] [/dev/fb0] [<scene>] [cmdfifo|cmdfifo-sysram] [dump]
  *   <scene> = basic|cubes|grid|twod|clamp|texfmt|fog|minif|lines|rasterop|multitex|alpha
  *
  * Freestanding (nolibc); build with the Makefile here.  Boot the card
@@ -999,6 +999,8 @@ int main(int argc, char **argv)
 			do_ppm = 1;
 		} else if (streq(argv[i], "cmdfifo")) {
 			use_cmdfifo = 1;
+		} else if (streq(argv[i], "cmdfifo-sysram")) {
+			use_cmdfifo = 2;
 		} else if (npos++ == 0) {
 			rdev = argv[i];
 		} else {
@@ -1017,11 +1019,16 @@ int main(int argc, char **argv)
 	}
 	/*
 	 * With `cmdfifo`, submit the same frame through the DMA command FIFO
-	 * (a VRAM ring the card pulls from) instead of per-command MMIO.  The
+	 * (a ring the card pulls from) instead of per-command MMIO.  The
 	 * rendered result -- and so the digest -- is identical to the PIO path;
-	 * this exercises the submission route that smolminigl uses.
+	 * this exercises the submission route that smolminigl uses.  The ring is
+	 * normally in VRAM; `cmdfifo-sysram` puts it in system RAM (the AGP path,
+	 * for a bus-mastering card), falling back to VRAM if the driver has no
+	 * cmdFifo-alloc ioctl.
 	 */
-	if (use_cmdfifo)
+	if (use_cmdfifo == 2 && smoltdfx_cmdfifo_init_sysram(1024 * 1024) == 0)
+		;
+	else if (use_cmdfifo)
 		smoltdfx_cmdfifo_init(1024 * 1024);
 	if (scene == SC_GRID || scene == SC_CLAMP || scene == SC_TEXFMT ||
 	    scene == SC_RASTEROP || scene == SC_MULTITEX)
