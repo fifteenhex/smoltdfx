@@ -1010,14 +1010,11 @@ int main(int argc, char **argv)
 		}
 	}
 
-	mount("none", "/dev", "devtmpfs", 0, 0);
-
 	if (smoltdfx_init(rdev, fdev) < 0) {
 		static const char m[] = "tdfx3d_demo: init failed\n";
 
 		write(2, m, sizeof(m) - 1);
-		for (;;)
-			usleep(1000000);
+		return 1;
 	}
 	/*
 	 * With `cmdfifo`, submit the same frame through the DMA command FIFO

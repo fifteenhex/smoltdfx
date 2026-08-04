@@ -52,7 +52,8 @@ QEMU run and a hardware run can be compared directly), then animates.
 ## Build & run
 
     make redbook KDIR=/path/to/linux        # needs sibling ../cglm and ../stb checkouts
-    ./redbook/smooth /dev/tdfx3d /dev/fb0    # on the target (or as an initrd /init under QEMU)
+    ./redbook/smooth /dev/tdfx3d /dev/fb0    # on the target
 
 Each demo is a single freestanding (nolibc) translation unit that `#include`s
-`smolminigl.c`.
+`smolminigl.c`.  It is an ordinary program: it opens the two devices, renders,
+and returns non-zero if the device cannot be opened.
