@@ -52,6 +52,7 @@ static inline void smoltdfx_wait_idle(void);		/* defined below */
 #define SMOLTDFX_CMD_BUMP	0x80028
 #define SMOLTDFX_CMD_RDPTRL	0x8002c
 #define SMOLTDFX_CMD_EN		(1u << 8)
+#define SMOLTDFX_CMD_AGP	(1u << 9)		/* ring in system RAM */
 
 static inline void smoltdfx_cmd_creg(unsigned int off, unsigned int v)
 {
@@ -86,6 +87,85 @@ static inline void smoltdfx_cmd_pkt1(unsigned int off, unsigned int val, int is2
 	       (1u << 16);
 	r[1] = val;
 	smoltdfx_cmd_wp += 8;
+}
+
+/* reserve `nwords` contiguously before the ring end (drain + wrap if not) */
+static inline void smoltdfx_cmd_reserve(unsigned int nwords)
+{
+	if (smoltdfx_cmd_wp + nwords * 4 > smoltdfx_cmd_size)
+		smoltdfx_cmd_wrap();
+}
+static inline void smoltdfx_cmd_word(unsigned int v)	/* append (space reserved) */
+{
+	*(volatile unsigned int *)(smoltdfx_cmd_mem + smoltdfx_cmd_wp) = v;
+	smoltdfx_cmd_wp += 4;
+}
+static inline void smoltdfx_cmd_wordf(float f)
+{
+	union { float f; unsigned int u; } c;
+
+	c.f = f;
+	smoltdfx_cmd_word(c.u);
+}
+
+/*
+ * PKT3 native-vertex packets: stream a whole triangle strip into the ring in
+ * the setup unit's packed layout (one packet per <=15-vertex chunk) instead of
+ * ~30 register writes per triangle.  HW-validated by the tdfx_pkt3 probe.  Each
+ * vertex is X, Y, then the params their PMASK bit selects, in canonical order.
+ */
+#define SMOLTDFX_PKT3		3u
+#define SMOLTDFX_PKT3_STRIP	(1u << 3)	/* BDDDDD: begin, then draws */
+#define SMOLTDFX_PKT3_CONT	(2u << 3)	/* DDDDDD: strip continuation */
+#define SMOLTDFX_PKT3_PACKED	(1u << 28)	/* colour is one packed ARGB word */
+#define SMOLTDFX_P_RGB		(1u << 0)
+#define SMOLTDFX_P_Z		(1u << 2)
+#define SMOLTDFX_P_WFBI		(1u << 3)
+#define SMOLTDFX_P_ST0		(1u << 5)
+
+/* words a PKT3 vertex occupies for `pmask` (packed colour) */
+static inline unsigned int smoltdfx_pkt3_vsize(unsigned int pmask)
+{
+	unsigned int n = 2;				/* X, Y always */
+
+	if (pmask & SMOLTDFX_P_RGB)  n += 1;		/* packed ARGB */
+	if (pmask & SMOLTDFX_P_Z)    n += 1;
+	if (pmask & SMOLTDFX_P_WFBI) n += 1;
+	if (pmask & SMOLTDFX_P_ST0)  n += 2;		/* S0, T0 */
+	return n;
+}
+/* PKT3 header for a chunk of `nvert` (<=15) vertices; cmd = STRIP or CONT */
+static inline void smoltdfx_cmd_pkt3_hdr(unsigned int pmask, unsigned int cmd,
+					 unsigned int nvert)
+{
+	smoltdfx_cmd_word(SMOLTDFX_PKT3 | cmd | ((nvert & 0xf) << 6) |
+			  ((pmask & 0xfff) << 10) | SMOLTDFX_PKT3_PACKED);
+}
+/* one packed vertex, params in canonical order matching `pmask` */
+static inline void smoltdfx_cmd_pkt3_vtx(unsigned int pmask, float x, float y,
+					 unsigned int argb, float z, float w,
+					 float s0, float t0)
+{
+	smoltdfx_cmd_wordf(x);
+	smoltdfx_cmd_wordf(y);
+	if (pmask & SMOLTDFX_P_RGB)  smoltdfx_cmd_word(argb);
+	if (pmask & SMOLTDFX_P_Z)    smoltdfx_cmd_wordf(z);
+	if (pmask & SMOLTDFX_P_WFBI) smoltdfx_cmd_wordf(w);
+	if (pmask & SMOLTDFX_P_ST0)  { smoltdfx_cmd_wordf(s0); smoltdfx_cmd_wordf(t0); }
+}
+
+/*
+ * PKT5 linear data burst: write `nwords` inline data words into VRAM starting
+ * at byte address `base` (LFB space) -- e.g. a texture upload.  The payload
+ * travels through the ring, so there is no system-RAM DMA.  Caller reserves
+ * 2 + nwords and appends the payload with smoltdfx_cmd_word().  HW-validated by
+ * the tdfx_pkt5 probe.
+ */
+#define SMOLTDFX_PKT5		5u
+static inline void smoltdfx_cmd_pkt5_hdr(unsigned int base, unsigned int nwords)
+{
+	smoltdfx_cmd_word(SMOLTDFX_PKT5 | (nwords << 3));	/* space LFB, byten 0 */
+	smoltdfx_cmd_word(base & 0x1ffffff);
 }
 
 /* ---------------------- low-level register access -------------------- */
@@ -227,6 +307,41 @@ static inline int smoltdfx_cmdfifo_init(unsigned int ring_bytes)
 	smoltdfx_cmd_creg(SMOLTDFX_CMD_BASEADDRL, base >> 12);
 	smoltdfx_cmd_creg(SMOLTDFX_CMD_RDPTRL, base);
 	smoltdfx_cmd_creg(SMOLTDFX_CMD_BASESIZE, (pages - 1) | SMOLTDFX_CMD_EN);
+	smoltdfx_cmd_on = 1;
+	return 0;
+}
+
+/*
+ * Alternative to smoltdfx_cmdfifo_init(): put the ring in SYSTEM RAM instead of
+ * VRAM, for a card that can bus-master.  The kernel allocates a DMA-coherent
+ * ring (TDFX3D_ALLOC_CMDFIFO) and returns its PCI bus address; we mmap it and
+ * program the card with that address + the AGP bit.  VRAM is left entirely free
+ * for textures.  Returns 0 on success, -1 if the driver lacks the ioctl or the
+ * mapping fails.
+ */
+static inline int smoltdfx_cmdfifo_init_sysram(unsigned int ring_bytes)
+{
+	struct tdfx3d_cmdfifo cf;
+	unsigned int pages;
+	void *p;
+
+	cf.size = ring_bytes ? ring_bytes : 4096;
+	cf.bus_addr = 0;
+	if (ioctl(smoltdfx_fd, TDFX3D_ALLOC_CMDFIFO, &cf) < 0)
+		return -1;
+	p = mmap(0, cf.size, PROT_READ | PROT_WRITE, MAP_SHARED,
+		 smoltdfx_fd, TDFX3D_CMDFIFO_MMAP_OFFSET);
+	if (p == (void *)-1)
+		return -1;
+	pages = cf.size >> 12;
+	smoltdfx_cmd_mem = (volatile unsigned char *)p;
+	smoltdfx_cmd_hw   = cf.bus_addr;	/* PCI bus address */
+	smoltdfx_cmd_size = cf.size;
+	smoltdfx_cmd_wp = smoltdfx_cmd_committed = 0;
+	smoltdfx_cmd_creg(SMOLTDFX_CMD_BASEADDRL, cf.bus_addr >> 12);
+	smoltdfx_cmd_creg(SMOLTDFX_CMD_RDPTRL, cf.bus_addr);
+	smoltdfx_cmd_creg(SMOLTDFX_CMD_BASESIZE,
+			  (pages - 1) | SMOLTDFX_CMD_EN | SMOLTDFX_CMD_AGP);
 	smoltdfx_cmd_on = 1;
 	return 0;
 }
