@@ -59,6 +59,19 @@ Pass `cmdfifo` to render a scene through it; the digest matches the PIO path
 exactly (e.g. `grid` and `grid cmdfifo` both hash to `0x68432370`). This is
 the submission route the higher-level GL layer uses.
 
+Beyond the PKT1 register-write packets above, the ring carries a few more
+packet types the GL layer relies on (all HW-validated by the probes in the
+validation tree):
+
+- **PKT3** — native setup-unit vertices: a whole triangle strip in one packed
+  packet (≤15 verts each) instead of ~30 register writes per triangle.
+- **PKT5** — a linear data burst (e.g. a texture upload) written straight into
+  VRAM through the ring, so the payload never leaves the card's memory.
+- **System-RAM ring** — `smoltdfx_cmdfifo_init_sysram()` puts the ring in
+  DMA-coherent system RAM instead of VRAM (the AGP bit) for a bus-mastering
+  card, leaving all of VRAM free for textures. Pass `cmdfifo-sysram` to run a
+  scene through it (`grid cmdfifo-sysram` also hashes to `0x68432370`).
+
 ## Build
 
 Needs a Linux source tree with the `/dev/tdfx3d` support for its in-tree
