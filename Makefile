@@ -33,7 +33,7 @@ STB    ?= $(CURDIR)/../stb
 SMGCFLAGS := $(CFLAGS) -I. -I$(CGLM) -I$(STB)
 
 # OpenGL Red Book-style demos, each rendered through smolminigl.
-REDBOOK := redbook/smooth redbook/transform redbook/cube
+REDBOOK := redbook/smooth redbook/transform redbook/cube redbook/texquad
 
 tdfx3d_demo: tdfx3d_demo.c smoltdfx.h
 	$(CC) $(CFLAGS) -o $@ $< -lgcc
