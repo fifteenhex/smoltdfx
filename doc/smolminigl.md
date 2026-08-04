@@ -44,10 +44,15 @@ QEMU run and a hardware run can be compared directly), then animates.
 | `smooth` | Gouraud (smooth) shading — a triangle blended between three corner colours |
 | `transform` | model transformations + the matrix stack — `glTranslatef`/`glRotatef`/`glScalef` with `glPushMatrix`/`glPopMatrix` |
 | `cube` | perspective (`glFrustum`) + the depth buffer — a solid six-face cube whose near faces correctly occlude the far ones |
+| `texquad` | texture mapping — `glTexImage2D` + `glTexCoord2f` wrap an image onto a quad, perspective-correct across a tilted surface |
 
-| smooth | transform | cube |
-|:---:|:---:|:---:|
-| ![smooth](redbook_smooth.png) | ![transform](redbook_transform.png) | ![cube](redbook_cube.png) |
+| smooth | transform |
+|:---:|:---:|
+| ![smooth](redbook_smooth.png) | ![transform](redbook_transform.png) |
+
+| cube | texquad |
+|:---:|:---:|
+| ![cube](redbook_cube.png) | ![texquad](redbook_texquad.png) |
 
 ## Build & run
 
