@@ -82,13 +82,11 @@ int main(int argc, char **argv)
 	const char *fdev = argc > 2 ? argv[2] : "/dev/fb0";
 	float t = 0.0f;
 
-	mount("none", "/dev", "devtmpfs", 0, 0);
 	if (smolminigl_open(rdev, fdev) < 0) {
 		static const char m[] = "transform: smolminigl_open failed\n";
 
 		write(2, m, sizeof(m) - 1);
-		for (;;)
-			usleep(1000000);
+		return 1;
 	}
 
 	draw(0.4f);			/* canonical frame + digest */

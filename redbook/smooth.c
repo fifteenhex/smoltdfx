@@ -51,13 +51,11 @@ int main(int argc, char **argv)
 	const char *fdev = argc > 2 ? argv[2] : "/dev/fb0";
 	float ang = 0.0f;
 
-	mount("none", "/dev", "devtmpfs", 0, 0);
 	if (smolminigl_open(rdev, fdev) < 0) {
 		static const char m[] = "smooth: smolminigl_open failed\n";
 
 		write(2, m, sizeof(m) - 1);
-		for (;;)
-			usleep(1000000);
+		return 1;
 	}
 
 	/* canonical frame (fixed phase) + digest, for QEMU-vs-hardware compare */
