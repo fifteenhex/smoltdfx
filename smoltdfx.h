@@ -31,6 +31,7 @@ static unsigned int smoltdfx_cur;			/* which buffer is the back one */
 static unsigned int smoltdfx_fbz;			/* shadow of fbzMode */
 static unsigned int smoltdfx_alpha;			/* shadow of alphaMode */
 static unsigned int smoltdfx_vram_size;			/* mapped VRAM length (smem_len) */
+static unsigned int smoltdfx_vram_usable;		/* VRAM below the cmdFifo ring */
 
 /*
  * DMA command FIFO (cmdFifo0): batch register writes into a VRAM ring the card
@@ -257,6 +258,7 @@ static int smoltdfx_init(const char *regdev, const char *fbdev)
 	if (smoltdfx_vram == (void *)-1)
 		return -1;
 	smoltdfx_vram_size = fix.smem_len;
+	smoltdfx_vram_usable = fix.smem_len;	/* whole of VRAM until a ring is carved */
 
 	smoltdfx_W = smoltdfx_rio(TDFX_IO_VIDSCREENSIZE) & 0xfff;
 	smoltdfx_H = (smoltdfx_rio(TDFX_IO_VIDSCREENSIZE) >> 12) & 0xfff;
@@ -305,6 +307,7 @@ static inline int smoltdfx_cmdfifo_init(unsigned int ring_bytes)
 	smoltdfx_cmd_hw = base;			/* VRAM byte offset */
 	smoltdfx_cmd_size = pages << 12;
 	smoltdfx_cmd_wp = smoltdfx_cmd_committed = 0;
+	smoltdfx_vram_usable = base;		/* buffers/textures stay below the ring */
 	smoltdfx_cmd_creg(SMOLTDFX_CMD_BASEADDRL, base >> 12);
 	smoltdfx_cmd_creg(SMOLTDFX_CMD_RDPTRL, base);
 	smoltdfx_cmd_creg(SMOLTDFX_CMD_BASESIZE, (pages - 1) | SMOLTDFX_CMD_EN);
@@ -807,6 +810,41 @@ static inline void smoltdfx_blt_s2s(int sx, int sy, int dx, int dy,
 	smoltdfx_w2(TDFX_2D_COMMAND, TDFX_2D_OP_S2S_BLT | TDFX_2D_CMD_INITIATE |
 		    (TDFX_2D_ROP_SRCCOPY << 24));
 	smoltdfx_wait_idle();
+}
+
+/*
+ * Composite present: copy the finished offscreen (back) buffer to the
+ * scanned-out front buffer with a 2D blit, synced to vblank.  Unlike a page
+ * flip (SWAPBUFFERCMD), this does not rely on the CRTC start address following
+ * the swap, so the display always shows a complete frame -- no tearing /
+ * partial-render noise.  The caller renders to the back buffer every frame
+ * (smoltdfx_cur == 1) and never flips.
+ */
+static inline void smoltdfx_composite(void)
+{
+	smoltdfx_wait_idle();			/* finish the 3D frame offscreen */
+	ioctl(smoltdfx_fd, TDFX3D_WAIT_VBLANK, 0);
+	smoltdfx_w2(TDFX_2D_CLIP0MIN, 0);
+	smoltdfx_w2(TDFX_2D_CLIP0MAX, (smoltdfx_H << 16) | smoltdfx_W);
+	smoltdfx_w2(TDFX_2D_SRCBASE, smoltdfx_back);
+	smoltdfx_w2(TDFX_2D_SRCFORMAT, (3u << 16) | smoltdfx_stride);
+	smoltdfx_w2(TDFX_2D_DSTBASE, smoltdfx_front);
+	smoltdfx_w2(TDFX_2D_DSTFORMAT, (3u << 16) | smoltdfx_stride);
+	smoltdfx_w2(TDFX_2D_DSTSIZE, (smoltdfx_H << 16) | smoltdfx_W);
+	smoltdfx_w2(TDFX_2D_SRCXY, 0);
+	smoltdfx_w2(TDFX_2D_DSTXY, 0);
+	smoltdfx_w2(TDFX_2D_COMMAND, TDFX_2D_OP_S2S_BLT | TDFX_2D_CMD_INITIATE |
+		    (TDFX_2D_ROP_SRCCOPY << 24));
+	smoltdfx_wait_idle();
+	/*
+	 * The 2D blit only marks the front buffer dirty; the scanout address is
+	 * moved by a buffer swap.  Present the (now-whole) front buffer, then
+	 * restore the back buffer as the 3D render target for the next frame.
+	 */
+	smoltdfx_w3(TDFX_3D_COLBUFFERADDR, smoltdfx_front);
+	smoltdfx_w3(TDFX_3D_SWAPBUFFERCMD, 0);
+	smoltdfx_w3(TDFX_3D_COLBUFFERADDR, smoltdfx_back);
+	smoltdfx_cmd_flush();			/* push the present out immediately */
 }
 
 /* ============================ diagnostics ============================ *

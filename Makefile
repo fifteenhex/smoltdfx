@@ -26,10 +26,23 @@ GCCINC := $(shell $(CC) -print-file-name=include)
 CFLAGS := -Os -static -nostdlib -nostdinc -isystem $(GCCINC) \
 	  -I$(HDRS) -I$(NOLIBC) -include nolibc.h -fno-stack-protector
 
+# smolminigl (the OpenGL-1.x subset on smoltdfx) needs its cglm matrix/vector
+# math and stb texture resampler; both are sibling checkouts.
+CGLM   ?= $(CURDIR)/../cglm/include
+STB    ?= $(CURDIR)/../stb
+SMGCFLAGS := $(CFLAGS) -I. -I$(CGLM) -I$(STB)
+
+# OpenGL Red Book-style demos, each rendered through smolminigl.
+REDBOOK := redbook/smooth
+
 tdfx3d_demo: tdfx3d_demo.c smoltdfx.h
 	$(CC) $(CFLAGS) -o $@ $< -lgcc
 
-clean:
-	rm -f tdfx3d_demo
+redbook: $(REDBOOK)
+$(REDBOOK): %: %.c smolminigl.c GL/gl.h smoltdfx.h smg_cglm.h smg_stb.h
+	$(CC) $(SMGCFLAGS) -o $@ $< -lgcc
 
-.PHONY: clean
+clean:
+	rm -f tdfx3d_demo $(REDBOOK)
+
+.PHONY: clean redbook
