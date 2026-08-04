@@ -29,8 +29,11 @@ digests smoltdfx uses.
 - **Present.** `smolminigl_swap()` composites the finished offscreen buffer to
   the display via a vblank-synced 2D blit (no tearing).
 
-Submission goes through smoltdfx's command FIFO when available (strips as PKT3
-packets, texture uploads as PKT5 bursts); output is identical to the PIO path.
+Submission goes through smoltdfx's command FIFO when available: geometry as
+native-vertex PKT3 packets — triangle strips as one strip, and independent
+triangles (also quads, fans and polygons) as PKT3 triangle lists — and texture
+uploads as PKT5 bursts.  A primitive that crosses the near plane falls back to
+the per-triangle clip path.  Output is identical to the PIO path.
 
 ## Demos
 

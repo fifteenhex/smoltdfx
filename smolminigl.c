@@ -569,6 +569,80 @@ static void smg_strip_pkt3(void)
 	}
 }
 
+/*
+ * Emit `ntri` independent triangles (vertex index triples in idx[]) as native-
+ * vertex packets (PKT3) into the command FIFO, using the independent-triangle
+ * command (BDDBDD): the setup unit issues sBeginTri on every third vertex, so
+ * each group of three is its own triangle -- the same begin+draw+draw stream as
+ * the per-triangle PIO path, at ~7 words/vertex instead of a register burst per
+ * vertex.  A packet holds up to 15 vertices (numVertex is 4 bits), so it is
+ * chunked on triangle (multiple-of-three) boundaries to keep the begin-every-
+ * third pattern aligned.  Caller guarantees every referenced vertex is inside
+ * the near plane (no per-triangle clipping needed).
+ */
+#define SMG_PKT3_MAXTRI 5			/* 5 tris * 3 verts = 15 (numVertex max) */
+
+static void smg_trilist_pkt3(const int *idx, int ntri)
+{
+	unsigned int pmask = smg_setupmode & 0xfff;
+	unsigned int vsize = smoltdfx_pkt3_vsize(pmask);
+	int npkt = (ntri + SMG_PKT3_MAXTRI - 1) / SMG_PKT3_MAXTRI;
+	int off = 0;
+
+	smoltdfx_cmd_reserve(npkt + ntri * 3 * vsize);	/* headers + all vertices */
+	while (off < ntri) {
+		int chunk = ntri - off, t, k;
+
+		if (chunk > SMG_PKT3_MAXTRI)
+			chunk = SMG_PKT3_MAXTRI;
+		smoltdfx_cmd_pkt3_hdr(pmask, SMOLTDFX_PKT3_TRIS, chunk * 3);
+		for (t = 0; t < chunk; t++)
+			for (k = 0; k < 3; k++) {
+				struct smg_hwvert h;
+
+				smg_project(&smg_cv[idx[(off + t) * 3 + k]], &h);
+				smoltdfx_cmd_pkt3_vtx(pmask, h.sx, h.sy, h.argb,
+						      h.depth, h.oow, h.sc, h.tc);
+			}
+		off += chunk;
+	}
+}
+
+/* decompose the buffered primitive into a flat list of triangle index triples;
+ * returns the triangle count.  Same triangles (and winding) as the per-triangle
+ * smg_tri() loops below. */
+static int smg_build_trilist(int *idx)
+{
+	int i, n = 0;
+
+	switch (smg_prim) {
+	case GL_TRIANGLES:
+		for (i = 0; i + 2 < smg_nv; i += 3) {
+			idx[n * 3] = i; idx[n * 3 + 1] = i + 1; idx[n * 3 + 2] = i + 2;
+			n++;
+		}
+		break;
+	case GL_QUADS:
+		for (i = 0; i + 3 < smg_nv; i += 4) {
+			idx[n * 3] = i; idx[n * 3 + 1] = i + 1; idx[n * 3 + 2] = i + 2;
+			n++;
+			idx[n * 3] = i; idx[n * 3 + 1] = i + 2; idx[n * 3 + 2] = i + 3;
+			n++;
+		}
+		break;
+	case GL_TRIANGLE_FAN:
+	case GL_POLYGON:
+		for (i = 1; i + 1 < smg_nv; i++) {
+			idx[n * 3] = 0; idx[n * 3 + 1] = i; idx[n * 3 + 2] = i + 1;
+			n++;
+		}
+		break;
+	}
+	return n;
+}
+
+static int smg_idx[3 * SMG_MAXVERT];	/* triangle-list scratch for glEnd */
+
 void glEnd(void)
 {
 	int i;
@@ -592,9 +666,26 @@ void glEnd(void)
 		smg_to_clip(&smg_vbuf[i], &smg_cv[i]);
 	switch (smg_prim) {
 	case GL_TRIANGLES:
-		for (i = 0; i + 2 < smg_nv; i += 3)
-			smg_tri(i, i + 1, i + 2);
+	case GL_QUADS:
+	case GL_TRIANGLE_FAN:
+	case GL_POLYGON: {
+		/*
+		 * Independent triangles (also quads/fans/polygons, which decompose
+		 * into them).  When the whole primitive is inside the near plane it
+		 * goes to the setup unit as one PKT3 triangle list; otherwise fall
+		 * back to the per-triangle path, which near-clips each triangle.
+		 */
+		int ntri = smg_build_trilist(smg_idx);
+
+		if (smg_pkt3_on && smg_all_inside()) {
+			smg_trilist_pkt3(smg_idx, ntri);
+		} else {
+			for (i = 0; i < ntri; i++)
+				smg_tri(smg_idx[i * 3], smg_idx[i * 3 + 1],
+					smg_idx[i * 3 + 2]);
+		}
 		break;
+	}
 	case GL_TRIANGLE_STRIP:
 		/*
 		 * A fully-visible strip goes to the hardware setup unit as one strip
@@ -613,17 +704,6 @@ void glEnd(void)
 					smg_tri(i + 1, i, i + 2);
 				else
 					smg_tri(i, i + 1, i + 2);
-		}
-		break;
-	case GL_TRIANGLE_FAN:
-	case GL_POLYGON:
-		for (i = 1; i + 1 < smg_nv; i++)
-			smg_tri(0, i, i + 1);
-		break;
-	case GL_QUADS:
-		for (i = 0; i + 3 < smg_nv; i += 4) {
-			smg_tri(i, i + 1, i + 2);
-			smg_tri(i, i + 2, i + 3);
 		}
 		break;
 	}

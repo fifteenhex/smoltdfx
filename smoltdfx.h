@@ -117,6 +117,7 @@ static inline void smoltdfx_cmd_wordf(float f)
  * vertex is X, Y, then the params their PMASK bit selects, in canonical order.
  */
 #define SMOLTDFX_PKT3		3u
+#define SMOLTDFX_PKT3_TRIS	(0u << 3)	/* BDDBDD: independent tris, begin/3 */
 #define SMOLTDFX_PKT3_STRIP	(1u << 3)	/* BDDDDD: begin, then draws */
 #define SMOLTDFX_PKT3_CONT	(2u << 3)	/* DDDDDD: strip continuation */
 #define SMOLTDFX_PKT3_PACKED	(1u << 28)	/* colour is one packed ARGB word */
