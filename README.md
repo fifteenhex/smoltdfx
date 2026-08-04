@@ -46,6 +46,19 @@ checksum plus a fixed 8×6 grid of sampled RGB565 pixels — then animates.
 The digest lets a QEMU run and a real-hardware run be compared directly.
 Pass `dump` to also write the canonical frame to `/tmp/smoltdfx.ppm`.
 
+## Command FIFO
+
+By default smoltdfx submits each drawing command as a direct MMIO register
+write. `smoltdfx_cmdfifo_init()` switches to a **DMA command FIFO**: a ring
+carved from the top of VRAM that the card pulls commands from, so a batch of
+register writes is committed with a single `bump` instead of one MMIO write
+(a PCI transaction) each. It is transparent — the rendered result is
+identical either way.
+
+Pass `cmdfifo` to render a scene through it; the digest matches the PIO path
+exactly (e.g. `grid` and `grid cmdfifo` both hash to `0x68432370`). This is
+the submission route the higher-level GL layer uses.
+
 ## Build
 
 Needs a Linux source tree with the `/dev/tdfx3d` support for its in-tree
