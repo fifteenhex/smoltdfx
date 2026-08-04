@@ -42,8 +42,11 @@ QEMU run and a hardware run can be compared directly), then animates.
 | demo | concept |
 |---|---|
 | `smooth` | Gouraud (smooth) shading — a triangle blended between three corner colours |
+| `transform` | model transformations + the matrix stack — `glTranslatef`/`glRotatef`/`glScalef` with `glPushMatrix`/`glPopMatrix` |
 
-![smooth](redbook_smooth.png)
+| smooth | transform |
+|:---:|:---:|
+| ![smooth](redbook_smooth.png) | ![transform](redbook_transform.png) |
 
 ## Build & run
 
