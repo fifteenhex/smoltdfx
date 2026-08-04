@@ -50,6 +50,21 @@ checksum plus a fixed 8×6 grid of sampled RGB565 pixels — then animates.
 The digest lets a QEMU run and a real-hardware run be compared directly.
 Pass `dump` to also write the canonical frame to `/tmp/smoltdfx.ppm`.
 
+## QEMU model
+
+The other half of this workflow is a **QEMU model of the Voodoo3**: smoltdfx
+is developed and regression-tested against an emulated card, and the same
+binary then runs on real Voodoo3 hardware — the two are held to the same
+digest above, so any divergence is caught immediately.
+
+That model was **written by Claude** and **verified by a human against a real
+Voodoo3 3000**, feature by feature, using exactly
+these digests: each pixel-pipeline behaviour was checked on silicon before the
+model was trusted, and the handful of known remaining divergences are
+documented in the model's journal. It lives on a branch of QEMU:
+
+<https://github.com/fifteenhex/qemu/tree/intern-voodoo3>
+
 ## Command FIFO
 
 By default smoltdfx submits each drawing command as a direct MMIO register
