@@ -55,7 +55,7 @@ static void scene_basic(float t)
 
 	/* full-screen Gouraud quad: red/green/blue/yellow corners */
 	smoltdfx_setupmode(SM_BASE);
-	smoltdfx_quad(0, 0, W, H, 0xffff0000, 0xff0000ff, 0xff00ff00,
+	smoltdfx_quad(0, 0, W, H, 0xffff0000, 0xff00ff00, 0xff0000ff,
 		      0xffffff00, 0, 0);
 
 	/* a solid white quad bouncing across the background */
@@ -116,7 +116,7 @@ static void scene_cubes(float t)
 
 	smoltdfx_target();
 	smoltdfx_clip_full();
-	smoltdfx_depth(1, TDFX_ZF_LT);		/* also enables depth writes */
+	smoltdfx_depth(TDFX_ZF_LT);		/* also enables depth writes */
 	smoltdfx_clear(0xff101820, 0xffff);	/* clears colour and depth */
 
 	for (i = 0; i < 5; i++) {
@@ -417,11 +417,11 @@ static void draw_tile(int idx, float t)
 		break;
 	case 1:	/* Gouraud quad */
 		smoltdfx_setupmode(SM_BASE);
-		smoltdfx_quad(fx0, fy0, fx1, fy1, 0xffff0000, 0xff00ff00,
-			      0xff0000ff, 0xffffff00, 0, 0);
+		smoltdfx_quad(fx0, fy0, fx1, fy1, 0xffff0000, 0xff0000ff,
+			      0xff00ff00, 0xffffff00, 0, 0);
 		break;
 	case 2:	/* depth-buffered spinning cube */
-		smoltdfx_depth(1, TDFX_ZF_LT);
+		smoltdfx_depth(TDFX_ZF_LT);
 		draw_cube(cx, cy, (fx1 - fx0) * 0.55f, t);
 		break;
 	case 3:	/* point-sampled RGB565 checker */
@@ -506,13 +506,13 @@ static void draw_tile(int idx, float t)
 		smoltdfx_vtx(fx0, fy1, 1.0f, 0xffffffff, 0, 0, 1.0f, 0);
 		break;
 	case 13:	/* ordered dither: smooth dark gradient */
-		smoltdfx_dither(1, 0);
+		smoltdfx_dither(0);
 		smoltdfx_setupmode(SM_BASE);
-		smoltdfx_quad(fx0, fy0, fx1, fy1, 0xff000000, 0xff000000,
-			      0xff283040, 0xff283040, 0, 0);
+		smoltdfx_quad(fx0, fy0, fx1, fy1, 0xff000000, 0xff283040,
+			      0xff000000, 0xff283040, 0, 0);
 		break;
 	case 14:	/* chroma-key: magenta punched out of a sprite */
-		smoltdfx_chroma(1, 0xff00ff);
+		smoltdfx_chroma(0xff00ff);
 		smoltdfx_tex(TX_SPRITE, TDFX_TFMT_RGB565, 0, SMOLTDFX_TC_PASS, TEXCP);
 		smoltdfx_setupmode(SM_TEX);
 		smoltdfx_quad(fx0, fy0, fx1, fy1, -1, -1, -1, -1, 256, 256);
@@ -524,7 +524,7 @@ static void draw_tile(int idx, float t)
 		smoltdfx_quad(fx0, fy0, fx1, fy1, -1, -1, -1, -1, 256, 256);
 		break;
 	case 16:	/* stipple: 8x4 pattern (checker) punches holes in a fill */
-		smoltdfx_stipple(1, 0xaa55aa55u);
+		smoltdfx_stipple(0xaa55aa55u);
 		smoltdfx_setupmode(SM_BASE);
 		smoltdfx_quad(fx0, fy0, fx1, fy1, 0xff40ff40, 0xff40ff40,
 			      0xff40ff40, 0xff40ff40, 0, 0);
@@ -534,10 +534,10 @@ static void draw_tile(int idx, float t)
 		float dy0 = (fh - 1) - fy1, dy1 = (fh - 1) - fy0;
 
 		smoltdfx_clip(x0, (fh - 1) - y1, x1, (fh - 1) - y0);
-		smoltdfx_yorigin(1);
+		smoltdfx_yorigin();
 		smoltdfx_setupmode(SM_BASE);
-		smoltdfx_quad(fx0, dy0, fx1, dy1, 0xffffffff, 0xff000000,
-			      0xffffffff, 0xff000000, 0, 0);
+		smoltdfx_quad(fx0, dy0, fx1, dy1, 0xffffffff, 0xffffffff,
+			      0xff000000, 0xff000000, 0, 0);
 		break;
 	}
 	case 18: {	/* 2D host-to-screen blit: RGB565 pixels from host memory */
@@ -620,8 +620,8 @@ static void scene_twod(float t)
 
 	/* a Gouraud source block, then screen-to-screen copies of it */
 	smoltdfx_setupmode(SM_BASE);
-	smoltdfx_quad(sx, sy, sx + s, sy + s, 0xffff0000, 0xff0000ff,
-		      0xff00ff00, 0xffffff00, 0, 0);
+	smoltdfx_quad(sx, sy, sx + s, sy + s, 0xffff0000, 0xff00ff00,
+		      0xff0000ff, 0xffffff00, 0, 0);
 	for (i = 1; i <= 3; i++) {
 		int dx = sx + i * (s + 20);
 		int dy = sy + (int)(20.0f * smoltdfx_sin(t + i));
@@ -686,8 +686,8 @@ static void scene_fog(float t)
 	smoltdfx_clip(mx, 0, W - 1, my - 1);
 	smoltdfx_fog(0x20ff40, TDFX_FOG_ALPHA);
 	smoltdfx_setupmode(SM_A);
-	smoltdfx_quad(mx, 0, W, my, 0x00ff8000, 0x00ff8000,
-		      0xffff8000, 0xffff8000, 0, 0);
+	smoltdfx_quad(mx, 0, W, my, 0x00ff8000, 0xffff8000,
+		      0x00ff8000, 0xffff8000, 0, 0);
 	smoltdfx_fog_off();
 
 	/* BL: factor from iterated Z (left z=0 -> pixel, right z=max -> fog) */
@@ -706,8 +706,8 @@ static void scene_fog(float t)
 	smoltdfx_clip(mx, my, W - 1, H - 1);
 	smoltdfx_fog(0x000060, TDFX_FOG_CONSTANT);
 	smoltdfx_setupmode(SM_BASE);
-	smoltdfx_quad(mx, my, W, H, 0xff000000, 0xff808080,
-		      0xff404040, 0xffc0c0c0, 0, 0);
+	smoltdfx_quad(mx, my, W, H, 0xff000000, 0xff404040,
+		      0xff808080, 0xffc0c0c0, 0, 0);
 	smoltdfx_fog_off();
 }
 
@@ -799,25 +799,25 @@ static void scene_rasterop(float t)
 	smoltdfx_clear(0xff202830, 0xffff);	/* grey-blue background */
 
 	/* ---- left: ordered dither, OFF (left half) vs ON (right half) ---- */
-	smoltdfx_dither(0, 0);
+	smoltdfx_dither_off();
 	smoltdfx_setupmode(SM_BASE);
-	smoltdfx_quad(10, y0, pw * 0.5f - 2, y1, 0xff000000, 0xff000000,
-		      0xff2838a0, 0xff2838a0, 0, 0);
-	smoltdfx_dither(1, 0);
-	smoltdfx_quad(pw * 0.5f + 2, y0, pw - 10, y1, 0xff000000, 0xff000000,
-		      0xff2838a0, 0xff2838a0, 0, 0);
-	smoltdfx_dither(0, 0);
+	smoltdfx_quad(10, y0, pw * 0.5f - 2, y1, 0xff000000, 0xff2838a0,
+		      0xff000000, 0xff2838a0, 0, 0);
+	smoltdfx_dither(0);
+	smoltdfx_quad(pw * 0.5f + 2, y0, pw - 10, y1, 0xff000000, 0xff2838a0,
+		      0xff000000, 0xff2838a0, 0, 0);
+	smoltdfx_dither_off();
 
 	/* ---- middle: chroma-keyed sprite over the background ---- */
-	smoltdfx_chroma(1, 0xff00ff);		/* punch out magenta */
+	smoltdfx_chroma(0xff00ff);		/* punch out magenta */
 	smoltdfx_tex(TX_SPRITE, TDFX_TFMT_RGB565, 0, SMOLTDFX_TC_PASS, TEXCP);
 	smoltdfx_setupmode(SM_TEX);
 	smoltdfx_quad(pw + 10, y0, 2 * pw - 10, y1, -1, -1, -1, -1, TEXW, TEXW);
-	smoltdfx_chroma(0, 0);
+	smoltdfx_chroma_off();
 	smoltdfx_tex_off();
 
 	/* ---- right: 4x4 stipple over the background ---- */
-	smoltdfx_stipple(1, 0xaa55aa55u);
+	smoltdfx_stipple(0xaa55aa55u);
 	smoltdfx_setupmode(SM_BASE);
 	smoltdfx_quad(2 * pw + 10, y0, W - 10, y1, 0xff40ff40, 0xff40ff40,
 		      0xff40ff40, 0xff40ff40, 0, 0);
@@ -871,7 +871,7 @@ static void scene_multitex(float t)
  *   middle - test: a green quad whose alpha ramps 0->255 left to right with
  *            alpha-test GREATER 128, so only the right half survives (a hard
  *            vertical cutoff)
- *   right  - both at once (smoltdfx_blend_test): the same alpha ramp, but the
+ *   right  - both at once (blend + alpha test compose): the same alpha ramp, but the
  *            surviving right half is also 50%-ish blended over the background
  */
 static void scene_alpha(float t)
@@ -900,15 +900,17 @@ static void scene_alpha(float t)
 	}
 
 	/* ---- middle: alpha-test cutoff of a left->right alpha ramp ---- */
+	smoltdfx_alpha_off();				/* drop the left panel's blend */
 	smoltdfx_alpha_test(TDFX_ZF_GT, 128);		/* GREATER, ref = 128 */
 	smoltdfx_quad(pw + 10, y0, 2 * pw - 10, y1,
-		      0x0000ff00, 0x0000ff00, 0xff00ff00, 0xff00ff00, 0, 0);
+		      0x0000ff00, 0xff00ff00, 0x0000ff00, 0xff00ff00, 0, 0);
 
-	/* ---- right: alpha test AND blend together (smoltdfx_blend_test) ---- */
-	smoltdfx_blend_test(TDFX_BLEND_SRCALPHA, TDFX_BLEND_OMSRCALPHA,
-			    TDFX_ZF_GT, 32);
+	/* ---- right: alpha test AND blend at once (they compose) ---- */
+	smoltdfx_alpha_off();
+	smoltdfx_blend(TDFX_BLEND_SRCALPHA, TDFX_BLEND_OMSRCALPHA);
+	smoltdfx_alpha_test(TDFX_ZF_GT, 32);
 	smoltdfx_quad(2 * pw + 10, y0, W - 10, y1,
-		      0x00ffaa00, 0x00ffaa00, 0xffffaa00, 0xffffaa00, 0, 0);
+		      0x00ffaa00, 0xffffaa00, 0x00ffaa00, 0xffffaa00, 0, 0);
 
 	smoltdfx_alpha_off();
 }
