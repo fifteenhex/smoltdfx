@@ -12,6 +12,10 @@ register spaces) and which provides a `TDFX3D_WAIT_VBLANK` ioctl.
 Together with the `/dev/fbN` VRAM mapping this program renders directly
 from the hardware registers — no X, no Mesa/Glide.
 
+On top of this sits **[smolminigl](doc/smolminigl.md)** — a subset of
+OpenGL 1.x on the Voodoo3, with a set of small OpenGL demos (written from
+scratch, in the spirit of the classic teaching examples).
+
 The demo has selectable scenes:
 
 | `basic` | `cubes` | `grid` |
