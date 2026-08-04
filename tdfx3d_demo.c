@@ -23,7 +23,7 @@
  * grid) lets a QEMU run and a real-hardware run be compared, and the
  * selectable scenes make per-feature regression testing possible.
  *
- * Usage: tdfx3d_demo [/dev/tdfx3d] [/dev/fb0] [<scene>] [dump]
+  * Usage: tdfx3d_demo [/dev/tdfx3d] [/dev/fb0] [<scene>] [cmdfifo] [dump]
  *   <scene> = basic|cubes|grid|twod|clamp|texfmt|fog|minif|lines|rasterop|multitex|alpha
  *
  * Freestanding (nolibc); build with the Makefile here.  Boot the card
@@ -955,7 +955,7 @@ int main(int argc, char **argv)
 {
 	const char *rdev = "/dev/tdfx3d", *fdev = "/dev/fb0";
 	const char *tag = "grid";
-	int scene = SC_GRID, do_ppm = 0, npos = 0, i;
+	int scene = SC_GRID, do_ppm = 0, use_cmdfifo = 0, npos = 0, i;
 	float t;
 
 	for (i = 1; i < argc; i++) {
@@ -997,6 +997,8 @@ int main(int argc, char **argv)
 			tag = "alpha";
 		} else if (streq(argv[i], "dump")) {
 			do_ppm = 1;
+		} else if (streq(argv[i], "cmdfifo")) {
+			use_cmdfifo = 1;
 		} else if (npos++ == 0) {
 			rdev = argv[i];
 		} else {
@@ -1013,6 +1015,14 @@ int main(int argc, char **argv)
 		for (;;)
 			usleep(1000000);
 	}
+	/*
+	 * With `cmdfifo`, submit the same frame through the DMA command FIFO
+	 * (a VRAM ring the card pulls from) instead of per-command MMIO.  The
+	 * rendered result -- and so the digest -- is identical to the PIO path;
+	 * this exercises the submission route that smolminigl uses.
+	 */
+	if (use_cmdfifo)
+		smoltdfx_cmdfifo_init(1024 * 1024);
 	if (scene == SC_GRID || scene == SC_CLAMP || scene == SC_TEXFMT ||
 	    scene == SC_RASTEROP || scene == SC_MULTITEX)
 		gen_textures();
