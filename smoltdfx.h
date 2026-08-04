@@ -29,6 +29,7 @@ static unsigned int smoltdfx_W, smoltdfx_H, smoltdfx_stride;/* mode from fbdev *
 static unsigned int smoltdfx_front, smoltdfx_back, smoltdfx_aux;/* buffer offsets */
 static unsigned int smoltdfx_cur;			/* which buffer is the back one */
 static unsigned int smoltdfx_fbz;			/* shadow of fbzMode */
+static unsigned int smoltdfx_alpha;			/* shadow of alphaMode */
 static unsigned int smoltdfx_vram_size;			/* mapped VRAM length (smem_len) */
 
 /*
@@ -346,10 +347,15 @@ static inline int smoltdfx_cmdfifo_init_sysram(unsigned int ring_bytes)
 	return 0;
 }
 
+/* VRAM byte offset of the current render (back) buffer */
+static inline unsigned int smoltdfx_drawbuf(void)
+{
+	return smoltdfx_cur ? smoltdfx_back : smoltdfx_front;
+}
+
 /* target the back (render) colour buffer */
 static inline void smoltdfx_target(void)
-{ smoltdfx_w3(TDFX_3D_COLBUFFERADDR,
-	      smoltdfx_cur ? smoltdfx_back : smoltdfx_front); }
+{ smoltdfx_w3(TDFX_3D_COLBUFFERADDR, smoltdfx_drawbuf()); }
 
 /* fast-fill the clip rectangle with an ARGB colour and a depth value */
 static inline void smoltdfx_clear(unsigned int argb, unsigned int depth)
@@ -384,14 +390,16 @@ static inline void smoltdfx_zfunc(unsigned int func)
 	smoltdfx_w3(TDFX_3D_FBZMODE, smoltdfx_fbz);
 }
 
-/* enable/disable depth testing (and depth writes) with a compare func */
-static inline void smoltdfx_depth(int enable, unsigned int func)
+/* enable depth testing (and depth writes) with a compare func */
+static inline void smoltdfx_depth(unsigned int func)
 {
-	if (enable)
-		smoltdfx_fbz |= TDFX_FBZ_ENDEPTH | TDFX_FBZ_DEPTHWRMASK;
-	else
-		smoltdfx_fbz &= ~(TDFX_FBZ_ENDEPTH | TDFX_FBZ_DEPTHWRMASK);
+	smoltdfx_fbz |= TDFX_FBZ_ENDEPTH | TDFX_FBZ_DEPTHWRMASK;
 	smoltdfx_zfunc(func);
+}
+static inline void smoltdfx_depth_off(void)
+{
+	smoltdfx_fbz &= ~(TDFX_FBZ_ENDEPTH | TDFX_FBZ_DEPTHWRMASK);
+	smoltdfx_w3(TDFX_3D_FBZMODE, smoltdfx_fbz);
 }
 
 static inline void smoltdfx_clip(int x0, int y0, int x1, int y1)
@@ -499,37 +507,39 @@ static inline void smoltdfx_multitex(unsigned int base0, int fmt0,
 }
 
 /* ------------------------- alpha / fog ------------------------------- */
+/*
+ * Alpha blend and alpha test share the one alphaMode register.  Like fbzMode,
+ * it is kept in a shadow (smoltdfx_alpha) and each helper updates only its own
+ * fields, so blend and test COMPOSE: call both to test the incoming pixels and
+ * blend the survivors in one pass.  smoltdfx_alpha_off() clears everything.
+ */
+#define SMOLTDFX_ALPHA_BLENDBITS (TDFX_ALPHA_ENBLEND | \
+		(0xfu << TDFX_ALPHA_SRCFUNC_SHIFT) | (0xfu << TDFX_ALPHA_DSTFUNC_SHIFT))
+#define SMOLTDFX_ALPHA_TESTBITS (TDFX_ALPHA_ENTEST | \
+		(7u << TDFX_ALPHA_FUNC_SHIFT) | (0xffu << TDFX_ALPHA_REF_SHIFT))
+
 static inline void smoltdfx_blend(int srcf, int dstf)
 {
-	smoltdfx_w3(TDFX_3D_ALPHAMODE, TDFX_ALPHA_ENBLEND |
-		    (srcf << TDFX_ALPHA_SRCFUNC_SHIFT) |
-		    (dstf << TDFX_ALPHA_DSTFUNC_SHIFT));
+	smoltdfx_alpha = (smoltdfx_alpha & ~SMOLTDFX_ALPHA_BLENDBITS) |
+			 TDFX_ALPHA_ENBLEND |
+			 (srcf << TDFX_ALPHA_SRCFUNC_SHIFT) |
+			 (dstf << TDFX_ALPHA_DSTFUNC_SHIFT);
+	smoltdfx_w3(TDFX_3D_ALPHAMODE, smoltdfx_alpha);
 }
 
 static inline void smoltdfx_alpha_test(int func, int ref)
 {
-	smoltdfx_w3(TDFX_3D_ALPHAMODE, TDFX_ALPHA_ENTEST |
-		    ((func & 7) << TDFX_ALPHA_FUNC_SHIFT) |
-		    ((ref & 0xff) << TDFX_ALPHA_REF_SHIFT));
+	smoltdfx_alpha = (smoltdfx_alpha & ~SMOLTDFX_ALPHA_TESTBITS) |
+			 TDFX_ALPHA_ENTEST |
+			 ((func & 7) << TDFX_ALPHA_FUNC_SHIFT) |
+			 ((ref & 0xff) << TDFX_ALPHA_REF_SHIFT);
+	smoltdfx_w3(TDFX_3D_ALPHAMODE, smoltdfx_alpha);
 }
 
 static inline void smoltdfx_alpha_off(void)
 {
+	smoltdfx_alpha = 0;
 	smoltdfx_w3(TDFX_3D_ALPHAMODE, 0);
-}
-
-/*
- * Alpha test and alpha blend share the one alphaMode register, so the separate
- * helpers above each overwrite it -- you cannot have both.  This enables them
- * together (test the incoming alpha, then blend the survivors) in a single pass.
- */
-static inline void smoltdfx_blend_test(int srcf, int dstf, int func, int ref)
-{
-	smoltdfx_w3(TDFX_3D_ALPHAMODE, TDFX_ALPHA_ENBLEND | TDFX_ALPHA_ENTEST |
-		    (srcf << TDFX_ALPHA_SRCFUNC_SHIFT) |
-		    (dstf << TDFX_ALPHA_DSTFUNC_SHIFT) |
-		    ((func & 7) << TDFX_ALPHA_FUNC_SHIFT) |
-		    ((ref & 0xff) << TDFX_ALPHA_REF_SHIFT));
 }
 
 /* table fog indexed by eye-W: fill all 64 entries with a linear 0->255 ramp */
@@ -563,55 +573,65 @@ static inline void smoltdfx_fog_off(void)
 }
 
 /* ------------------------- raster ops -------------------------------- */
-static inline void smoltdfx_dither(int on, int twobytwo)
+/* ordered dither: twobytwo selects the 2x2 matrix (else the default 4x4) */
+static inline void smoltdfx_dither(int twobytwo)
 {
 	if (twobytwo)
 		smoltdfx_fbz |= TDFX_FBZ_DITHER2X2;
 	else
 		smoltdfx_fbz &= ~TDFX_FBZ_DITHER2X2;
-	smoltdfx_fbz_bit(TDFX_FBZ_ENDITHER, on);
+	smoltdfx_fbz_bit(TDFX_FBZ_ENDITHER, 1);
+}
+static inline void smoltdfx_dither_off(void)
+{
+	smoltdfx_fbz &= ~TDFX_FBZ_DITHER2X2;
+	smoltdfx_fbz_bit(TDFX_FBZ_ENDITHER, 0);
 }
 
-static inline void smoltdfx_chroma(int on, unsigned int key)
+/* chroma-key: discard pixels whose colour equals `key` (0xRRGGBB) */
+static inline void smoltdfx_chroma(unsigned int key)
 {
 	smoltdfx_w3(TDFX_3D_CHROMAKEY, key & 0xffffff);
-	smoltdfx_fbz_bit(TDFX_FBZ_ENCHROMAKEY, on);
+	smoltdfx_fbz_bit(TDFX_FBZ_ENCHROMAKEY, 1);
+}
+static inline void smoltdfx_chroma_off(void)
+{
+	smoltdfx_fbz_bit(TDFX_FBZ_ENCHROMAKEY, 0);
 }
 
 /*
- * 4x4-pattern stipple: the low 16 bits of `pattern` mask a repeating 4x4
- * grid of pixels (bit set = drawn).  Enables the STIPPLEPATTERN (4x4) mode;
- * smoltdfx_stipple_off() disables stippling and clears the mode bit so the
- * fbzMode shadow returns to a clean state for later primitives.
+ * 4x4-pattern stipple: the low 16 bits of `pattern` mask a repeating 4x4 grid
+ * of pixels (bit set = drawn).  smoltdfx_stipple_off() disables stippling and
+ * clears the mode bit so the fbzMode shadow returns to a clean state.
  */
-static inline void smoltdfx_stipple(int on, unsigned int pattern)
+static inline void smoltdfx_stipple(unsigned int pattern)
 {
 	smoltdfx_w3(TDFX_3D_STIPPLE, pattern);
-	if (on)
-		smoltdfx_fbz |= TDFX_FBZ_STIPPLEPATTERN;	/* 4x4 mode */
-	else
-		smoltdfx_fbz &= ~TDFX_FBZ_STIPPLEPATTERN;
-	smoltdfx_fbz_bit(TDFX_FBZ_ENSTIPPLE, on);
+	smoltdfx_fbz |= TDFX_FBZ_STIPPLEPATTERN;		/* 4x4 mode */
+	smoltdfx_fbz_bit(TDFX_FBZ_ENSTIPPLE, 1);
 }
 static inline void smoltdfx_stipple_off(void)
 {
-	smoltdfx_stipple(0, 0);
+	smoltdfx_fbz &= ~TDFX_FBZ_STIPPLEPATTERN;
+	smoltdfx_fbz_bit(TDFX_FBZ_ENSTIPPLE, 0);
 }
 
 /*
- * Y-origin swap: flip the vertical axis about miscInit0[29:18].  Enabling
- * it loads the pivot with screenHeight-1 (read-modify-write to keep the
+ * Y-origin swap: flip the vertical axis about miscInit0[29:18].  Enabling it
+ * loads the pivot with screenHeight-1 (read-modify-write to keep the
  * memory-config bits).
  */
-static inline void smoltdfx_yorigin(int on)
+static inline void smoltdfx_yorigin(void)
 {
-	if (on) {
-		volatile unsigned int *m = (volatile unsigned int *)
-			(smoltdfx_regs + TDFX_IO_BASE + TDFX_IO_MISCINIT0);
+	volatile unsigned int *m = (volatile unsigned int *)
+		(smoltdfx_regs + TDFX_IO_BASE + TDFX_IO_MISCINIT0);
 
-		*m = (*m & ~(0xfffu << 18)) | ((smoltdfx_H - 1) << 18);
-	}
-	smoltdfx_fbz_bit(TDFX_FBZ_YORIGIN, on);
+	*m = (*m & ~(0xfffu << 18)) | ((smoltdfx_H - 1) << 18);
+	smoltdfx_fbz_bit(TDFX_FBZ_YORIGIN, 1);
+}
+static inline void smoltdfx_yorigin_off(void)
+{
+	smoltdfx_fbz_bit(TDFX_FBZ_YORIGIN, 0);
 }
 
 /* --------------------------- geometry -------------------------------- */
@@ -639,12 +659,13 @@ static inline void smoltdfx_vtx(float x, float y, float z, unsigned int argb,
 /*
  * Draw an axis-aligned quad as two independent triangles (each begun with
  * its own SBEGIN), so it does not depend on the setup unit's strip/fan
- * vertex assembly.  Corner colours (Gouraud) via the named args; pass
- * texel span (s1,t1) = 0 for untextured.
+ * vertex assembly.  Corner colours (Gouraud) are given in reading order --
+ * top-left, top-right, bottom-left, bottom-right; pass texel span (s1,t1) = 0
+ * for untextured.
  */
 static inline void smoltdfx_quad(float x0, float y0, float x1, float y1,
-				 unsigned int cTL, unsigned int cBL,
-				 unsigned int cTR, unsigned int cBR,
+				 unsigned int cTL, unsigned int cTR,
+				 unsigned int cBL, unsigned int cBR,
 				 float s1, float t1)
 {
 	smoltdfx_vtx(x0, y0, 1.0f, cTL, 0,  0,  1.0f, 1);	/* TL */
@@ -718,7 +739,7 @@ static inline void smoltdfx_w2(unsigned int off, unsigned int v)
 static inline void smoltdfx_blt_rgb565(int dx, int dy, int w, int h,
 				       const unsigned short *src)
 {
-	unsigned int dst = smoltdfx_cur ? smoltdfx_back : smoltdfx_front;
+	unsigned int dst = smoltdfx_drawbuf();
 	int x, y;
 
 	smoltdfx_wait_idle();
@@ -748,7 +769,7 @@ static inline void smoltdfx_blt_rgb565(int dx, int dy, int w, int h,
 static inline void smoltdfx_rectfill(int dx, int dy, int w, int h,
 				     unsigned int color)
 {
-	unsigned int dst = smoltdfx_cur ? smoltdfx_back : smoltdfx_front;
+	unsigned int dst = smoltdfx_drawbuf();
 
 	smoltdfx_wait_idle();
 	smoltdfx_w2(TDFX_2D_CLIP0MIN, 0);
@@ -771,7 +792,7 @@ static inline void smoltdfx_rectfill(int dx, int dy, int w, int h,
 static inline void smoltdfx_blt_s2s(int sx, int sy, int dx, int dy,
 				    int w, int h)
 {
-	unsigned int buf = smoltdfx_cur ? smoltdfx_back : smoltdfx_front;
+	unsigned int buf = smoltdfx_drawbuf();
 
 	smoltdfx_wait_idle();
 	smoltdfx_w2(TDFX_2D_CLIP0MIN, 0);
@@ -825,7 +846,7 @@ static inline unsigned int smoltdfx_checksum(unsigned int off)
 	return h;
 }
 
-static inline void smoltdfx__emit(const char *fmt, ...)
+static inline void smoltdfx_emit(const char *fmt, ...)
 {
 	char b[256];
 	va_list ap;
@@ -844,22 +865,22 @@ static inline void smoltdfx_digest(const char *tag, unsigned int off, int milli)
 	int r, c;
 
 	smoltdfx_wait_idle();
-	smoltdfx__emit("== smoltdfx digest: %s ==\n", tag);
-	smoltdfx__emit("mode %ux%u t=%d.%03d sum 0x%08x\n", smoltdfx_W,
+	smoltdfx_emit("== smoltdfx digest: %s ==\n", tag);
+	smoltdfx_emit("mode %ux%u t=%d.%03d sum 0x%08x\n", smoltdfx_W,
 		       smoltdfx_H, milli / 1000, milli % 1000,
 		       smoltdfx_checksum(off));
 	for (r = 0; r < 6; r++) {
 		int y = (2 * r + 1) * (int)smoltdfx_H / 12;
 
-		smoltdfx__emit("r%d:", r);
+		smoltdfx_emit("r%d:", r);
 		for (c = 0; c < 8; c++) {
 			int x = (2 * c + 1) * (int)smoltdfx_W / 16;
 
-			smoltdfx__emit(" %04x", smoltdfx_peek(off, x, y));
+			smoltdfx_emit(" %04x", smoltdfx_peek(off, x, y));
 		}
-		smoltdfx__emit("\n");
+		smoltdfx_emit("\n");
 	}
-	smoltdfx__emit("== end ==\n");
+	smoltdfx_emit("== end ==\n");
 }
 
 /* write the buffer at byte offset `off` as a binary PPM (P6) */
