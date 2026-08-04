@@ -23,6 +23,8 @@
 #include "smg_stb.h"		/* stb_image_resize2 texture resampler */
 #include "GL/gl.h"
 
+static int smg_pkt3_on, smg_pkt5_on;	/* emit strips as PKT3 / upload via PKT5 */
+
 #define SMG_SETUP_BASE	(TDFX_SSETUP_RGB | TDFX_SSETUP_Z | TDFX_SSETUP_WFBI)
 #define SMG_SETUP_TEX	(SMG_SETUP_BASE | TDFX_SSETUP_ST0)
 /*
@@ -601,7 +603,7 @@ void glEnd(void)
 		 * triangles (the winding swap keeps a consistent order there).
 		 */
 		if (smg_all_inside()) {
-			if (smoltdfx_pkt3_on)
+			if (smg_pkt3_on)
 				smg_strip_pkt3();
 			else
 				smg_strip_seq();
@@ -785,7 +787,7 @@ static void smg_write_level(struct smg_tex *tx, unsigned int base, int dim)
 {
 	int n = dim * dim, i;
 
-	if (smoltdfx_pkt5_on && tx->bpt == 2 && dim >= 2) {
+	if (smg_pkt5_on && tx->bpt == 2 && dim >= 2) {
 		int words = n >> 1;		/* two u16 texels per 32-bit word */
 
 		smoltdfx_cmd_reserve(2 + words);
@@ -882,7 +884,7 @@ static void smg_make_resident(struct smg_tex *tx)
 		 * With PKT5 uploads the re-upload is itself an ordered ring packet
 		 * that lands after those draws, so no drain is needed.
 		 */
-		if (!smoltdfx_pkt5_on)
+		if (!smg_pkt5_on)
 			smoltdfx_wait_idle();
 		smg_wrapflushes++;
 		for (i = 1; i < SMG_MAXTEX; i++)
@@ -1098,8 +1100,8 @@ int smolminigl_open(const char *regdev, const char *fbdev)
 		if (!sysram || smoltdfx_cmdfifo_init_sysram(1024 * 1024) < 0)
 			smoltdfx_cmdfifo_init(1024 * 1024);	/* 256 pages: hw baseSize max */
 	}
-	smoltdfx_pkt3_on = 1;			/* fully-visible strips -> PKT3 packets */
-	smoltdfx_pkt5_on = 1;			/* texture uploads -> PKT5 ring bursts */
+	smg_pkt3_on = 1;			/* fully-visible strips -> PKT3 packets */
+	smg_pkt5_on = 1;			/* texture uploads -> PKT5 ring bursts */
 	smg_mv_top = smg_pr_top = 0;
 	smg_ident(smg_mv[0]);
 	smg_ident(smg_pr[0]);
