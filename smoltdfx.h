@@ -29,10 +29,72 @@ static unsigned int smoltdfx_W, smoltdfx_H, smoltdfx_stride;/* mode from fbdev *
 static unsigned int smoltdfx_front, smoltdfx_back, smoltdfx_aux;/* buffer offsets */
 static unsigned int smoltdfx_cur;			/* which buffer is the back one */
 static unsigned int smoltdfx_fbz;			/* shadow of fbzMode */
+static unsigned int smoltdfx_vram_size;			/* mapped VRAM length (smem_len) */
+
+/*
+ * DMA command FIFO (cmdFifo0): batch register writes into a VRAM ring the card
+ * pulls from, committed with one `bump` per flush, instead of a MMIO write (a
+ * PCI transaction) per command.  Opt-in:
+ * smoltdfx uses direct PIO until smoltdfx_cmdfifo_init() is called.  The ring
+ * is a contiguous buffer: smoltdfx_cmd_mem is the CPU pointer we append to,
+ * smoltdfx_cmd_hw the byte address the card reads from, wp/committed offsets
+ * from the start.  Register offsets / packet format are HW-validated.
+ */
+static int smoltdfx_cmd_on;				/* route writes via cmdFifo */
+static volatile unsigned char *smoltdfx_cmd_mem;	/* CPU ptr to ring base */
+static unsigned int smoltdfx_cmd_hw;			/* card base addr (VRAM offset) */
+static unsigned int smoltdfx_cmd_size;			/* ring bytes */
+static unsigned int smoltdfx_cmd_wp, smoltdfx_cmd_committed;	/* 0..size */
+static inline void smoltdfx_wait_idle(void);		/* defined below */
+
+#define SMOLTDFX_CMD_BASEADDRL	0x80020
+#define SMOLTDFX_CMD_BASESIZE	0x80024
+#define SMOLTDFX_CMD_BUMP	0x80028
+#define SMOLTDFX_CMD_RDPTRL	0x8002c
+#define SMOLTDFX_CMD_EN		(1u << 8)
+
+static inline void smoltdfx_cmd_creg(unsigned int off, unsigned int v)
+{
+	*(volatile unsigned int *)(smoltdfx_regs + off) = v;	/* absolute aperture */
+}
+/* commit the packets appended since the last flush (advance the card) */
+static inline void smoltdfx_cmd_flush(void)
+{
+	if (smoltdfx_cmd_wp != smoltdfx_cmd_committed) {
+		smoltdfx_cmd_creg(SMOLTDFX_CMD_BUMP,
+				  smoltdfx_cmd_wp - smoltdfx_cmd_committed);
+		smoltdfx_cmd_committed = smoltdfx_cmd_wp;
+	}
+}
+/* ring full: commit, drain, and rewind the read/write pointers to the start */
+static inline void smoltdfx_cmd_wrap(void)
+{
+	smoltdfx_cmd_flush();
+	smoltdfx_wait_idle();
+	smoltdfx_cmd_wp = smoltdfx_cmd_committed = 0;
+	smoltdfx_cmd_creg(SMOLTDFX_CMD_RDPTRL, smoltdfx_cmd_hw);
+}
+/* append a one-word register-write packet (PKT1, NWORDS=1) to the ring */
+static inline void smoltdfx_cmd_pkt1(unsigned int off, unsigned int val, int is2d)
+{
+	volatile unsigned int *r;
+
+	if (smoltdfx_cmd_wp + 8 > smoltdfx_cmd_size)
+		smoltdfx_cmd_wrap();
+	r = (volatile unsigned int *)(smoltdfx_cmd_mem + smoltdfx_cmd_wp);
+	r[0] = 1u | (((off >> 2) & 0x3ff) << 3) | (is2d ? (1u << 14) : 0) |
+	       (1u << 16);
+	r[1] = val;
+	smoltdfx_cmd_wp += 8;
+}
 
 /* ---------------------- low-level register access -------------------- */
 static inline void smoltdfx_w3(unsigned int off, unsigned int v)
 {
+	if (smoltdfx_cmd_on) {
+		smoltdfx_cmd_pkt1(off, v, 0);
+		return;
+	}
 	*(volatile unsigned int *)(smoltdfx_regs + TDFX_3D_BASE + off) = v;
 }
 static inline unsigned int smoltdfx_rio(unsigned int off)
@@ -113,6 +175,7 @@ static int smoltdfx_init(const char *regdev, const char *fbdev)
 			     MAP_SHARED, ffd, 0);
 	if (smoltdfx_vram == (void *)-1)
 		return -1;
+	smoltdfx_vram_size = fix.smem_len;
 
 	smoltdfx_W = smoltdfx_rio(TDFX_IO_VIDSCREENSIZE) & 0xfff;
 	smoltdfx_H = (smoltdfx_rio(TDFX_IO_VIDSCREENSIZE) >> 12) & 0xfff;
@@ -136,6 +199,35 @@ static int smoltdfx_init(const char *regdev, const char *fbdev)
 	smoltdfx_fbz = TDFX_FBZ_RGBWRMASK |
 		       (TDFX_ZF_GT << TDFX_FBZ_ZFUNC_SHIFT);
 	smoltdfx_w3(TDFX_3D_FBZMODE, smoltdfx_fbz);
+	return 0;
+}
+
+/*
+ * Carve a command-FIFO ring out of the top of VRAM and route subsequent
+ * register writes through it (opt-in; smoltdfx uses PIO until this is called).
+ * ring_bytes is rounded up to whole 4KB pages.  Returns 0 on success, -1 if the
+ * VRAM size is unknown or too small.
+ */
+static inline int smoltdfx_cmdfifo_init(unsigned int ring_bytes)
+{
+	unsigned int pages, base;
+
+	if (!smoltdfx_vram_size)
+		return -1;
+	pages = (ring_bytes + 0xfffu) >> 12;
+	if (!pages)
+		pages = 1;
+	if ((pages << 12) >= smoltdfx_vram_size)
+		return -1;
+	base = (smoltdfx_vram_size - (pages << 12)) & ~0xfffu;
+	smoltdfx_cmd_mem = (volatile unsigned char *)smoltdfx_vram + base;
+	smoltdfx_cmd_hw = base;			/* VRAM byte offset */
+	smoltdfx_cmd_size = pages << 12;
+	smoltdfx_cmd_wp = smoltdfx_cmd_committed = 0;
+	smoltdfx_cmd_creg(SMOLTDFX_CMD_BASEADDRL, base >> 12);
+	smoltdfx_cmd_creg(SMOLTDFX_CMD_RDPTRL, base);
+	smoltdfx_cmd_creg(SMOLTDFX_CMD_BASESIZE, (pages - 1) | SMOLTDFX_CMD_EN);
+	smoltdfx_cmd_on = 1;
 	return 0;
 }
 
@@ -495,6 +587,10 @@ static inline void smoltdfx_wait_idle(void);		/* defined below */
 
 static inline void smoltdfx_w2(unsigned int off, unsigned int v)
 {
+	if (smoltdfx_cmd_on) {
+		smoltdfx_cmd_pkt1(off, v, 1);
+		return;
+	}
 	*(volatile unsigned int *)(smoltdfx_regs + TDFX_2D_BASE + off) = v;
 }
 
@@ -588,6 +684,7 @@ static inline void smoltdfx_wait_idle(void)
 {
 	int i;
 
+	smoltdfx_cmd_flush();		/* commit any queued cmdFifo packets first */
 	for (i = 0; i < 2000000; i++)
 		if (!(*(volatile unsigned int *)(smoltdfx_regs + TDFX_3D_BASE +
 					     TDFX_3D_STATUS) & TDFX_STATUS_BUSY))
