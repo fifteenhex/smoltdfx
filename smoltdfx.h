@@ -311,6 +311,20 @@ static inline void smoltdfx_alpha_off(void)
 	smoltdfx_w3(TDFX_3D_ALPHAMODE, 0);
 }
 
+/*
+ * Alpha test and alpha blend share the one alphaMode register, so the separate
+ * helpers above each overwrite it -- you cannot have both.  This enables them
+ * together (test the incoming alpha, then blend the survivors) in a single pass.
+ */
+static inline void smoltdfx_blend_test(int srcf, int dstf, int func, int ref)
+{
+	smoltdfx_w3(TDFX_3D_ALPHAMODE, TDFX_ALPHA_ENBLEND | TDFX_ALPHA_ENTEST |
+		    (srcf << TDFX_ALPHA_SRCFUNC_SHIFT) |
+		    (dstf << TDFX_ALPHA_DSTFUNC_SHIFT) |
+		    ((func & 7) << TDFX_ALPHA_FUNC_SHIFT) |
+		    ((ref & 0xff) << TDFX_ALPHA_REF_SHIFT));
+}
+
 /* table fog indexed by eye-W: fill all 64 entries with a linear 0->255 ramp */
 static inline void smoltdfx_fog_table(unsigned int color)
 {

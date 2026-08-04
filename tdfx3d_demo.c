@@ -24,7 +24,7 @@
  * selectable scenes make per-feature regression testing possible.
  *
  * Usage: tdfx3d_demo [/dev/tdfx3d] [/dev/fb0] [<scene>] [dump]
- *   <scene> = basic|cubes|grid|twod|clamp|texfmt|fog|minif|lines|rasterop|multitex
+ *   <scene> = basic|cubes|grid|twod|clamp|texfmt|fog|minif|lines|rasterop|multitex|alpha
  *
  * Freestanding (nolibc); build with the Makefile here.  Boot the card
  * with e.g. tdfxfb.mode_option=640x480-16@60 (RGB565, fb at VRAM 0).
@@ -39,7 +39,7 @@
 
 enum {
 	SC_BASIC, SC_CUBES, SC_GRID, SC_TWOD, SC_CLAMP, SC_TEXFMT, SC_FOG,
-	SC_MINIF, SC_LINES, SC_RASTEROP, SC_MULTITEX
+	SC_MINIF, SC_LINES, SC_RASTEROP, SC_MULTITEX, SC_ALPHA
 };
 
 /* ============================ scene: basic ========================== */
@@ -862,6 +862,57 @@ static void scene_multitex(float t)
 	smoltdfx_tex_off();
 }
 
+/* ========================== scene: alpha ========================= */
+/*
+ * Alpha blend and alpha test, one panel each (flat colours + Gouraud alpha,
+ * no textures, so the result is deterministic):
+ *   left   - blend: three translucent quads (R, G, B at 50% alpha) over the
+ *            background, src-alpha blended, so the overlaps mix
+ *   middle - test: a green quad whose alpha ramps 0->255 left to right with
+ *            alpha-test GREATER 128, so only the right half survives (a hard
+ *            vertical cutoff)
+ *   right  - both at once (smoltdfx_blend_test): the same alpha ramp, but the
+ *            surviving right half is also 50%-ish blended over the background
+ */
+static void scene_alpha(float t)
+{
+	int W = smoltdfx_W, H = smoltdfx_H;
+	float pw = W / 3.0f, y0 = 50, y1 = H - 50;
+	float cx = pw * 0.5f, cy = (y0 + y1) * 0.5f, r = pw * 0.28f;
+
+	(void)t;
+	smoltdfx_target();
+	smoltdfx_clip_full();
+	smoltdfx_clear(0xff202830, 0xffff);	/* grey-blue background */
+	smoltdfx_setupmode(SM_A);
+
+	/* ---- left: three 50%-alpha quads, src-alpha blended, overlapping ---- */
+	smoltdfx_blend(TDFX_BLEND_SRCALPHA, TDFX_BLEND_OMSRCALPHA);
+	{
+		unsigned int cr = 0x80ff0000, cg = 0x8000ff00, cb = 0x800000ff;
+
+		smoltdfx_quad(cx - r,     cy - r,     cx + r*0.3f, cy + r*0.3f,
+			      cr, cr, cr, cr, 0, 0);
+		smoltdfx_quad(cx - r*0.3f, cy - r,     cx + r,     cy + r*0.3f,
+			      cg, cg, cg, cg, 0, 0);
+		smoltdfx_quad(cx - r*0.5f, cy - r*0.3f, cx + r*0.5f, cy + r,
+			      cb, cb, cb, cb, 0, 0);
+	}
+
+	/* ---- middle: alpha-test cutoff of a left->right alpha ramp ---- */
+	smoltdfx_alpha_test(TDFX_ZF_GT, 128);		/* GREATER, ref = 128 */
+	smoltdfx_quad(pw + 10, y0, 2 * pw - 10, y1,
+		      0x0000ff00, 0x0000ff00, 0xff00ff00, 0xff00ff00, 0, 0);
+
+	/* ---- right: alpha test AND blend together (smoltdfx_blend_test) ---- */
+	smoltdfx_blend_test(TDFX_BLEND_SRCALPHA, TDFX_BLEND_OMSRCALPHA,
+			    TDFX_ZF_GT, 32);
+	smoltdfx_quad(2 * pw + 10, y0, W - 10, y1,
+		      0x00ffaa00, 0x00ffaa00, 0xffffaa00, 0xffffaa00, 0, 0);
+
+	smoltdfx_alpha_off();
+}
+
 /* ------------------------------ driver ------------------------------- */
 static void draw_scene(int scene, float t)
 {
@@ -885,6 +936,8 @@ static void draw_scene(int scene, float t)
 		scene_rasterop(t);
 	else if (scene == SC_MULTITEX)
 		scene_multitex(t);
+	else if (scene == SC_ALPHA)
+		scene_alpha(t);
 	else
 		scene_grid(t);
 }
@@ -939,6 +992,9 @@ int main(int argc, char **argv)
 		} else if (streq(argv[i], "multitex")) {
 			scene = SC_MULTITEX;
 			tag = "multitex";
+		} else if (streq(argv[i], "alpha")) {
+			scene = SC_ALPHA;
+			tag = "alpha";
 		} else if (streq(argv[i], "dump")) {
 			do_ppm = 1;
 		} else if (npos++ == 0) {

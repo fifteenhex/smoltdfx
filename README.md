@@ -26,9 +26,9 @@ The demo has selectable scenes:
 |:---:|:---:|:---:|
 | ![fog scene](doc/fog.png) | ![minif scene](doc/minif.png) | ![lines scene](doc/lines.png) |
 
-| `rasterop` | `multitex` | |
+| `rasterop` | `multitex` | `alpha` |
 |:---:|:---:|:---:|
-| ![rasterop scene](doc/rasterop.png) | ![multitex scene](doc/multitex.png) | |
+| ![rasterop scene](doc/rasterop.png) | ![multitex scene](doc/multitex.png) | ![alpha scene](doc/alpha.png) |
 
 ## Layout
 
