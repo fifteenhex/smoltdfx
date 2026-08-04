@@ -46,6 +46,7 @@ QEMU run and a hardware run can be compared directly), then animates.
 | `cube` | perspective (`glFrustum`) + the depth buffer — a solid six-face cube whose near faces correctly occlude the far ones |
 | `texquad` | texture mapping — `glTexImage2D` + `glTexCoord2f` wrap an image onto a quad, perspective-correct across a tilted surface |
 | `blend` | alpha blending / transparency — `glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)` mixes three translucent quads into new colours where they overlap |
+| `light` | diffuse (Lambert) shading — per-vertex `normal · light` computed on the CPU and Gouraud-interpolated across a lit sphere |
 
 | smooth | transform |
 |:---:|:---:|
@@ -55,9 +56,9 @@ QEMU run and a hardware run can be compared directly), then animates.
 |:---:|:---:|
 | ![cube](redbook_cube.png) | ![texquad](redbook_texquad.png) |
 
-| blend | |
+| blend | light |
 |:---:|:---:|
-| ![blend](redbook_blend.png) | |
+| ![blend](redbook_blend.png) | ![light](redbook_light.png) |
 
 ## Build & run
 
