@@ -15,6 +15,7 @@
  *   fog    - the fog factor sources: eye-W table, alpha, Z, constant
  *   minif  - mip LOD selection: the texture drawn at shrinking sizes
  *   lines  - line and point primitives: a starburst, thin lines, points
+ *   rasterop - fbzMode raster ops: ordered dither, chroma-key, stipple
  *
  * At start-up it renders one canonical frame (a fixed animation phase) of
  * the selected scene and prints a digest of it to the serial console,
@@ -23,7 +24,7 @@
  * selectable scenes make per-feature regression testing possible.
  *
  * Usage: tdfx3d_demo [/dev/tdfx3d] [/dev/fb0] [<scene>] [dump]
- *   <scene> = basic|cubes|grid|twod|clamp|texfmt|fog|minif|lines
+ *   <scene> = basic|cubes|grid|twod|clamp|texfmt|fog|minif|lines|rasterop
  *
  * Freestanding (nolibc); build with the Makefile here.  Boot the card
  * with e.g. tdfxfb.mode_option=640x480-16@60 (RGB565, fb at VRAM 0).
@@ -38,7 +39,7 @@
 
 enum {
 	SC_BASIC, SC_CUBES, SC_GRID, SC_TWOD, SC_CLAMP, SC_TEXFMT, SC_FOG,
-	SC_MINIF, SC_LINES
+	SC_MINIF, SC_LINES, SC_RASTEROP
 };
 
 /* ============================ scene: basic ========================== */
@@ -777,6 +778,52 @@ static void scene_lines(float t)
 		smoltdfx_point(80 + i * 56, H - 30, 2.0f + i * 2.0f, 0xffffffff);
 }
 
+/* ========================== scene: rasterop ======================= */
+/*
+ * The fbzMode raster ops, one per panel over a grey-blue background:
+ *   left   - ordered dither: a black->blue gradient drawn with dither OFF
+ *            (left half, visibly banded in RGB565) vs ON (right half, smooth)
+ *   middle - chroma-key: a magenta-keyed sprite whose magenta field is
+ *            punched out so the background shows through, leaving the diamond
+ *   right  - 4x4 stipple: a 0xaa55aa55 pattern masking a green fill so the
+ *            background shows through the holes
+ */
+static void scene_rasterop(float t)
+{
+	int W = smoltdfx_W, H = smoltdfx_H;
+	float pw = W / 3.0f, y0 = 60, y1 = H - 60;
+
+	(void)t;
+	smoltdfx_target();
+	smoltdfx_clip_full();
+	smoltdfx_clear(0xff202830, 0xffff);	/* grey-blue background */
+
+	/* ---- left: ordered dither, OFF (left half) vs ON (right half) ---- */
+	smoltdfx_dither(0, 0);
+	smoltdfx_setupmode(SM_BASE);
+	smoltdfx_quad(10, y0, pw * 0.5f - 2, y1, 0xff000000, 0xff000000,
+		      0xff2838a0, 0xff2838a0, 0, 0);
+	smoltdfx_dither(1, 0);
+	smoltdfx_quad(pw * 0.5f + 2, y0, pw - 10, y1, 0xff000000, 0xff000000,
+		      0xff2838a0, 0xff2838a0, 0, 0);
+	smoltdfx_dither(0, 0);
+
+	/* ---- middle: chroma-keyed sprite over the background ---- */
+	smoltdfx_chroma(1, 0xff00ff);		/* punch out magenta */
+	smoltdfx_tex(TX_SPRITE, TDFX_TFMT_RGB565, 0, SMOLTDFX_TC_PASS, TEXCP);
+	smoltdfx_setupmode(SM_TEX);
+	smoltdfx_quad(pw + 10, y0, 2 * pw - 10, y1, -1, -1, -1, -1, TEXW, TEXW);
+	smoltdfx_chroma(0, 0);
+	smoltdfx_tex_off();
+
+	/* ---- right: 4x4 stipple over the background ---- */
+	smoltdfx_stipple(1, 0xaa55aa55u);
+	smoltdfx_setupmode(SM_BASE);
+	smoltdfx_quad(2 * pw + 10, y0, W - 10, y1, 0xff40ff40, 0xff40ff40,
+		      0xff40ff40, 0xff40ff40, 0, 0);
+	smoltdfx_stipple_off();
+}
+
 /* ------------------------------ driver ------------------------------- */
 static void draw_scene(int scene, float t)
 {
@@ -796,6 +843,8 @@ static void draw_scene(int scene, float t)
 		scene_minif(t);
 	else if (scene == SC_LINES)
 		scene_lines(t);
+	else if (scene == SC_RASTEROP)
+		scene_rasterop(t);
 	else
 		scene_grid(t);
 }
@@ -844,6 +893,9 @@ int main(int argc, char **argv)
 		} else if (streq(argv[i], "lines")) {
 			scene = SC_LINES;
 			tag = "lines";
+		} else if (streq(argv[i], "rasterop")) {
+			scene = SC_RASTEROP;
+			tag = "rasterop";
 		} else if (streq(argv[i], "dump")) {
 			do_ppm = 1;
 		} else if (npos++ == 0) {
@@ -862,7 +914,8 @@ int main(int argc, char **argv)
 		for (;;)
 			usleep(1000000);
 	}
-	if (scene == SC_GRID || scene == SC_CLAMP || scene == SC_TEXFMT)
+	if (scene == SC_GRID || scene == SC_CLAMP || scene == SC_TEXFMT ||
+	    scene == SC_RASTEROP)
 		gen_textures();
 	if (scene == SC_TEXFMT)
 		gen_texfmt();

@@ -26,6 +26,10 @@ The demo has selectable scenes:
 |:---:|:---:|:---:|
 | ![fog scene](doc/fog.png) | ![minif scene](doc/minif.png) | ![lines scene](doc/lines.png) |
 
+| `rasterop` | | |
+|:---:|:---:|:---:|
+| ![rasterop scene](doc/rasterop.png) | | |
+
 ## Layout
 
 - **`smoltdfx.h`** — a small header-only library that wraps the raw

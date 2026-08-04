@@ -342,12 +342,24 @@ static inline void smoltdfx_chroma(int on, unsigned int key)
 	smoltdfx_fbz_bit(TDFX_FBZ_ENCHROMAKEY, on);
 }
 
+/*
+ * 4x4-pattern stipple: the low 16 bits of `pattern` mask a repeating 4x4
+ * grid of pixels (bit set = drawn).  Enables the STIPPLEPATTERN (4x4) mode;
+ * smoltdfx_stipple_off() disables stippling and clears the mode bit so the
+ * fbzMode shadow returns to a clean state for later primitives.
+ */
 static inline void smoltdfx_stipple(int on, unsigned int pattern)
 {
 	smoltdfx_w3(TDFX_3D_STIPPLE, pattern);
 	if (on)
 		smoltdfx_fbz |= TDFX_FBZ_STIPPLEPATTERN;	/* 4x4 mode */
+	else
+		smoltdfx_fbz &= ~TDFX_FBZ_STIPPLEPATTERN;
 	smoltdfx_fbz_bit(TDFX_FBZ_ENSTIPPLE, on);
+}
+static inline void smoltdfx_stipple_off(void)
+{
+	smoltdfx_stipple(0, 0);
 }
 
 /*
