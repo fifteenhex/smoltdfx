@@ -276,6 +276,21 @@ static inline void smoltdfx_tex1_off(void)
 	smoltdfx_w3(TDFX_3D_TMU1 + TDFX_3D_TEXTUREMODE, 0);
 }
 
+/*
+ * Single-pass multitexturing: sample base0 on TMU0 (passed through) and base1
+ * on TMU1, which modulates (multiplies) it -- the classic base x light-map
+ * combine done in one pass.  Both TMUs use the shared iterated texcoords.
+ * Disable afterwards with smoltdfx_tex1_off() then smoltdfx_tex_off().
+ */
+static inline void smoltdfx_multitex(unsigned int base0, int fmt0,
+				     unsigned int filt0, unsigned int base1,
+				     int fmt1, unsigned int filt1)
+{
+	smoltdfx_tex(base0, fmt0, filt0, SMOLTDFX_TC_PASS,
+		     TDFX_CP_RGB_TEXTURE | TDFX_CP_TEXTURE_EN);
+	smoltdfx_tex1(base1, fmt1, filt1, SMOLTDFX_TC_MODULATE);
+}
+
 /* ------------------------- alpha / fog ------------------------------- */
 static inline void smoltdfx_blend(int srcf, int dstf)
 {

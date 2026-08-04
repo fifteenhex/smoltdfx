@@ -24,7 +24,7 @@
  * selectable scenes make per-feature regression testing possible.
  *
  * Usage: tdfx3d_demo [/dev/tdfx3d] [/dev/fb0] [<scene>] [dump]
- *   <scene> = basic|cubes|grid|twod|clamp|texfmt|fog|minif|lines|rasterop
+ *   <scene> = basic|cubes|grid|twod|clamp|texfmt|fog|minif|lines|rasterop|multitex
  *
  * Freestanding (nolibc); build with the Makefile here.  Boot the card
  * with e.g. tdfxfb.mode_option=640x480-16@60 (RGB565, fb at VRAM 0).
@@ -39,7 +39,7 @@
 
 enum {
 	SC_BASIC, SC_CUBES, SC_GRID, SC_TWOD, SC_CLAMP, SC_TEXFMT, SC_FOG,
-	SC_MINIF, SC_LINES, SC_RASTEROP
+	SC_MINIF, SC_LINES, SC_RASTEROP, SC_MULTITEX
 };
 
 /* ============================ scene: basic ========================== */
@@ -824,6 +824,44 @@ static void scene_rasterop(float t)
 	smoltdfx_stipple_off();
 }
 
+/* ========================= scene: multitex ======================= */
+/*
+ * Single-pass multitexturing (dual TMU), shown as three panels so the
+ * combine is obvious: the base red/yellow checker on TMU0, the radial
+ * light map alone, and -- on the right -- the two combined in one pass
+ * (checker modulated by the light map, brightest at the centre, fading
+ * to dark at the edges).  Both TMUs sample the shared texcoords.
+ */
+static void scene_multitex(float t)
+{
+	int W = smoltdfx_W, H = smoltdfx_H;
+	float pw = W / 3.0f, y0 = 40, y1 = H - 40;
+
+	(void)t;
+	smoltdfx_target();
+	smoltdfx_clip_full();
+	smoltdfx_clear(0xff101018, 0xffff);
+	smoltdfx_setupmode(SM_TEX);
+
+	/* left: base checker only (TMU0) */
+	smoltdfx_tex1_off();
+	smoltdfx_tex(TX_CHECK, TDFX_TFMT_RGB565, 0, SMOLTDFX_TC_PASS,
+		     TEXCP);
+	smoltdfx_quad(10, y0, pw - 5, y1, -1, -1, -1, -1, TEXW, TEXW);
+
+	/* middle: the light map alone (TMU0) */
+	smoltdfx_tex(TX_LIGHT, TDFX_TFMT_RGB565, 0, SMOLTDFX_TC_PASS,
+		     TEXCP);
+	smoltdfx_quad(pw + 5, y0, 2 * pw - 5, y1, -1, -1, -1, -1, TEXW, TEXW);
+
+	/* right: checker x light map in one pass (both TMUs) */
+	smoltdfx_multitex(TX_CHECK, TDFX_TFMT_RGB565, 0,
+			  TX_LIGHT, TDFX_TFMT_RGB565, 0);
+	smoltdfx_quad(2 * pw + 10, y0, W - 10, y1, -1, -1, -1, -1, TEXW, TEXW);
+	smoltdfx_tex1_off();
+	smoltdfx_tex_off();
+}
+
 /* ------------------------------ driver ------------------------------- */
 static void draw_scene(int scene, float t)
 {
@@ -845,6 +883,8 @@ static void draw_scene(int scene, float t)
 		scene_lines(t);
 	else if (scene == SC_RASTEROP)
 		scene_rasterop(t);
+	else if (scene == SC_MULTITEX)
+		scene_multitex(t);
 	else
 		scene_grid(t);
 }
@@ -896,6 +936,9 @@ int main(int argc, char **argv)
 		} else if (streq(argv[i], "rasterop")) {
 			scene = SC_RASTEROP;
 			tag = "rasterop";
+		} else if (streq(argv[i], "multitex")) {
+			scene = SC_MULTITEX;
+			tag = "multitex";
 		} else if (streq(argv[i], "dump")) {
 			do_ppm = 1;
 		} else if (npos++ == 0) {
@@ -915,7 +958,7 @@ int main(int argc, char **argv)
 			usleep(1000000);
 	}
 	if (scene == SC_GRID || scene == SC_CLAMP || scene == SC_TEXFMT ||
-	    scene == SC_RASTEROP)
+	    scene == SC_RASTEROP || scene == SC_MULTITEX)
 		gen_textures();
 	if (scene == SC_TEXFMT)
 		gen_texfmt();
